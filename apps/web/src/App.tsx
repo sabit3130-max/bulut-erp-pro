@@ -79,12 +79,10 @@ function DualMoney({ tryValue, usdValue, compact = false }: { tryValue: number; 
 }
 
 function FinanceDisplay({ tryValue, usdValue }: { tryValue: number; usdValue: number }) {
-  const showTry = Math.abs(tryValue) > 0.004 || Math.abs(usdValue) < 0.004;
-  const showUsd = Math.abs(usdValue) > 0.004;
   return (
     <div className="flex flex-col gap-1">
-      {showTry && <span className="inline-flex w-fit rounded bg-[#dfeeff] px-2 py-1 text-xs font-bold text-[#1d5d99]">{money(tryValue)}</span>}
-      {showUsd && <span className="inline-flex w-fit rounded bg-[#d7f2ea] px-2 py-1 text-xs font-bold text-ocean">{money(usdValue, 'USD')}</span>}
+      <span className="inline-flex w-fit rounded bg-[#dfeeff] px-2 py-1 text-xs font-bold text-[#1d5d99]">{money(tryValue)}</span>
+      <span className="inline-flex w-fit rounded bg-[#d7f2ea] px-2 py-1 text-xs font-bold text-ocean">{money(usdValue, 'USD')}</span>
     </div>
   );
 }
@@ -3391,9 +3389,9 @@ function AccountDetailPage({ usdRate, detail, products, accounts, users, onCreat
   const remainingDebtTry = Math.max(0, account.balanceTry);
   const remainingDebtUsd = Math.max(0, account.balanceUsd);
   const totalRevenueDisplayTry = account.totalRevenueDisplayTry ?? (totalRevenueUsd > 0 ? tryFromUsd(totalRevenueUsd, usdRate) : totalRevenueTry);
-  const totalRevenueDisplayUsd = account.totalRevenueDisplayUsd ?? (totalRevenueUsd > 0 ? totalRevenueUsd : 0);
+  const totalRevenueDisplayUsd = account.totalRevenueDisplayUsd ?? (totalRevenueUsd > 0 ? totalRevenueUsd : usdFromTry(totalRevenueTry, usdRate));
   const remainingDisplayTry = account.balanceDisplayTry ?? (remainingDebtUsd > 0 ? tryFromUsd(remainingDebtUsd, usdRate) : remainingDebtTry);
-  const remainingDisplayUsd = account.balanceDisplayUsd ?? (remainingDebtUsd > 0 ? remainingDebtUsd : 0);
+  const remainingDisplayUsd = account.balanceDisplayUsd ?? (remainingDebtUsd > 0 ? remainingDebtUsd : usdFromTry(remainingDebtTry, usdRate));
   const [tab, setTab] = useState('Cari Ekstre');
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [collectionOpen, setCollectionOpen] = useState(false);

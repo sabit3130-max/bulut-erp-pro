@@ -1242,7 +1242,7 @@ export class DataService {
   whatsappDebtReminder(accountId: string) {
     const account = this.findAccount(accountId);
     const balance = this.accountBalanceSummary(account);
-    const message = `Sayin ${account.contactName || account.companyName},\n\nGuncel cari bakiyeniz:\nTL bakiye: ${balance.balanceTry} TL\nUSD bakiye: ${balance.balanceUsd} USD\n\nIyi calismalar.`;
+    const message = `Sayin ${account.contactName || account.companyName},\n\nGuncel cari bakiyeniz:\nTL bakiye: ${balance.displayTry} TL\nUSD bakiye: ${balance.displayUsd} USD\n\nIyi calismalar.`;
     return { to: account.whatsapp, message, link: this.whatsappLink(account.whatsapp, message) };
   }
 
@@ -1724,8 +1724,7 @@ export class DataService {
     return {
       balanceTry,
       balanceUsd,
-      displayTry: balanceUsd > 0 ? this.round(balanceUsd * this.usdRate) : Math.max(0, balanceTry),
-      displayUsd: balanceUsd > 0 ? balanceUsd : 0,
+      ...this.dualDisplay(balanceTry, balanceUsd),
     };
   }
 
@@ -1735,8 +1734,22 @@ export class DataService {
     return {
       totalTry,
       totalUsd,
-      displayTry: totalUsd > 0 ? this.round(totalUsd * this.usdRate) : Math.max(0, totalTry),
-      displayUsd: totalUsd > 0 ? totalUsd : 0,
+      ...this.dualDisplay(totalTry, totalUsd),
+    };
+  }
+
+  private dualDisplay(tryValue: number, usdValue: number) {
+    const positiveTry = Math.max(0, this.round(tryValue));
+    const positiveUsd = Math.max(0, this.round(usdValue));
+    if (positiveUsd > 0) {
+      return {
+        displayTry: this.round(positiveUsd * this.usdRate),
+        displayUsd: positiveUsd,
+      };
+    }
+    return {
+      displayTry: positiveTry,
+      displayUsd: positiveTry > 0 ? this.round(positiveTry / this.usdRate) : 0,
     };
   }
 
