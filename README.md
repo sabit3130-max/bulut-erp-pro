@@ -31,8 +31,11 @@ Kok dizindeki `.env.example` dosyasini `.env` olarak kopyalayin.
 
 ```bash
 PORT=3000
+NODE_ENV=production
 JWT_SECRET=change-this-in-production
 DATABASE_URL=postgresql://erp:erp_password@localhost:5432/erp_b2b?schema=public
+ERP_STORE_PATH=/app/data/erp-store.json
+ALLOW_DATA_IMPORT=false
 WEB_ORIGIN=https://erp.siteniz.com
 VITE_API_URL=https://api.erp.siteniz.com
 ADMIN_EMAIL=admin@buluterp.local
@@ -73,6 +76,10 @@ data/erp-store.json
 
 dosyasina yazilir. Uygulama kapanip acildiginda cari, urun, satis, alis, tahsilat, teklif, kategori, siparis ve odeme bildirimleri korunur. Store dosyasi yoksa sistem bos baslar; otomatik demo veri olusturulmaz.
 
+Canli deploy image icinde `data/erp-store.json` tutulmaz. VPS/Coolify uzerinde `ERP_STORE_PATH` icin kalici volume baglayin. Boylece redeploy/restart sirasinda repo veya Docker image icindeki dosya canli veriyi overwrite edemez.
+
+`NODE_ENV=production` iken JSON yedek importu varsayilan olarak kapali gelir. Geri yukleme yapilacaksa once sunucu yedegi alin, sonra sadece kontrollu bakim penceresinde `ALLOW_DATA_IMPORT=true` kullanin.
+
 Otomatik yedek icin `AUTO_BACKUP_ENABLED=true` yapin. Yedekler varsayilan olarak `data/backups` klasorune JSON dosyasi olarak yazilir. Bu klasoru VPS uzerinde kalici volume/disk olarak baglayin.
 
 ## PostgreSQL / Prisma
@@ -84,7 +91,9 @@ docker compose up -d db
 npm --workspace apps/api run db:migrate
 ```
 
-Prisma semasi `apps/api/prisma/schema.prisma` icindedir. Canli kurulumda onerilen yol, mevcut JSON store verisini yedekleyip PostgreSQL migration sonrasi import etmektir.
+`db:migrate` production icin `prisma migrate deploy` calistirir; veri silmez, sadece migration dosyalarini uygular. Gelistirme migration'i uretmek icin `npm --workspace apps/api run db:migrate:dev` kullanin. `prisma migrate reset` canli sistemde kesinlikle kullanilmaz.
+
+Prisma semasi `apps/api/prisma/schema.prisma` icindedir. Canli kurulumda onerilen yol, mevcut JSON store verisini yedekleyip PostgreSQL migration sonrasi kontrollu import etmektir.
 
 ## B2B Bayi Akisi
 

@@ -7,7 +7,7 @@ import { Account, Category, Collection, Currency, MessageTemplate, Order, Paymen
 
 @Injectable()
 export class DataService {
-  private readonly storePath = join(__dirname, '..', '..', '..', 'data', 'erp-store.json');
+  private readonly storePath = process.env.ERP_STORE_PATH || join(__dirname, '..', '..', '..', 'data', 'erp-store.json');
   private usdRate = 45.2714;
   private usdRateUpdatedAt = new Date().toISOString();
 
@@ -191,6 +191,9 @@ export class DataService {
 
   importStore(authorization: string | undefined, input: ReturnType<DataService['exportStore']>) {
     this.requireAdmin(authorization);
+    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DATA_IMPORT !== 'true') {
+      throw new BadRequestException('Production ortaminda yedek import kapali. Veri overwrite riskine karsi ALLOW_DATA_IMPORT=true olmadan calismaz.');
+    }
     if (!input || !Array.isArray(input.accounts) || !Array.isArray(input.products)) throw new BadRequestException('Yedek dosyasi hatali');
     this.usdRate = this.number(input.usdRate, this.usdRate);
     this.usdRateUpdatedAt = input.usdRateUpdatedAt || new Date().toISOString();
