@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Account, AccountDetail, apiDelete, apiGet, apiPost, apiPut, Category, Collection, Dashboard, MessageTemplate, Order, PaymentLog, PdfTemplate, Product, Purchase, Quote, Sale, SupplierPayment, TransactionItem, UserSession } from './api';
+import { Account, AccountDetail, apiDelete, apiGet, apiPost, apiPut, apiUrl, Category, Collection, Dashboard, MessageTemplate, Order, PaymentLog, PdfTemplate, Product, Purchase, Quote, Sale, SupplierPayment, TransactionItem, UserSession } from './api';
 
 type Tab = 'dashboard' | 'accounts' | 'products' | 'categories' | 'sales' | 'collections' | 'purchases' | 'dealer' | 'quotes' | 'pdfs' | 'messages' | 'tests' | 'settings';
 type Modal = 'account' | 'product' | null;
@@ -148,6 +148,7 @@ export function App() {
   const [returnDetailAccountId, setReturnDetailAccountId] = useState('');
   const [manualRate, setManualRate] = useState('');
   const [notice, setNotice] = useState('Demo sistem hazir');
+  const [apiError, setApiError] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserSession | null>(() => {
@@ -210,36 +211,42 @@ export function App() {
   }, []);
 
   async function refresh() {
-    const [dashboardData, accountData, productData, saleData, collectionData, purchaseData, supplierPaymentData, quoteData, orderData, logData, categoryData, pdfData, messageData, userData] = await Promise.all([
-      apiGet<Dashboard>('/dashboard'),
-      apiGet<Account[]>('/accounts'),
-      apiGet<Product[]>('/products'),
-      apiGet<Sale[]>('/sales'),
-      apiGet<Collection[]>('/collections'),
-      apiGet<Purchase[]>('/purchases'),
-      apiGet<SupplierPayment[]>('/supplier-payments'),
-      apiGet<Quote[]>('/quotes'),
-      apiGet<Order[]>('/orders'),
-      apiGet<PaymentLog[]>('/payments/logs'),
-      apiGet<Category[]>('/categories'),
-      apiGet<PdfTemplate[]>('/pdf-templates'),
-      apiGet<MessageTemplate[]>('/message-templates'),
-      apiGet<UserSession[]>('/users'),
-    ]);
-    setDashboard(dashboardData);
-    setAccounts(accountData);
-    setProducts(productData);
-    setSales(saleData);
-    setCollections(collectionData);
-    setPaymentLogs(logData);
-    setPurchases(purchaseData);
-    setSupplierPayments(supplierPaymentData);
-    setQuotes(quoteData);
-    setOrders(orderData);
-    setCategoriesData(categoryData);
-    setPdfTemplates(pdfData);
-    setMessageTemplates(messageData);
-    setUsers(userData);
+    try {
+      const [dashboardData, accountData, productData, saleData, collectionData, purchaseData, supplierPaymentData, quoteData, orderData, logData, categoryData, pdfData, messageData, userData] = await Promise.all([
+        apiGet<Dashboard>('/dashboard'),
+        apiGet<Account[]>('/accounts'),
+        apiGet<Product[]>('/products'),
+        apiGet<Sale[]>('/sales'),
+        apiGet<Collection[]>('/collections'),
+        apiGet<Purchase[]>('/purchases'),
+        apiGet<SupplierPayment[]>('/supplier-payments'),
+        apiGet<Quote[]>('/quotes'),
+        apiGet<Order[]>('/orders'),
+        apiGet<PaymentLog[]>('/payments/logs'),
+        apiGet<Category[]>('/categories'),
+        apiGet<PdfTemplate[]>('/pdf-templates'),
+        apiGet<MessageTemplate[]>('/message-templates'),
+        apiGet<UserSession[]>('/users'),
+      ]);
+      setApiError('');
+      setDashboard(dashboardData);
+      setAccounts(accountData);
+      setProducts(productData);
+      setSales(saleData);
+      setCollections(collectionData);
+      setPaymentLogs(logData);
+      setPurchases(purchaseData);
+      setSupplierPayments(supplierPaymentData);
+      setQuotes(quoteData);
+      setOrders(orderData);
+      setCategoriesData(categoryData);
+      setPdfTemplates(pdfData);
+      setMessageTemplates(messageData);
+      setUsers(userData);
+    } catch {
+      setApiError('API bağlantısı kurulamadı');
+      setNotice('API bağlantısı kurulamadı');
+    }
   }
 
   function storeSession(accessToken: string, user: UserSession) {
@@ -465,7 +472,7 @@ export function App() {
   }
 
   const content = useMemo(() => {
-    if (!dashboard) return <div className="p-8">Yukleniyor...</div>;
+    if (!dashboard) return <div className="rounded-2xl border border-line bg-white p-8 text-sm font-semibold text-rose dark:border-slate-700 dark:bg-[#17202a]">{apiError || 'Yukleniyor...'}</div>;
     const activeProducts = products.filter((product) => product.active !== false);
     if (currentUser?.role === 'CUSTOMER' || currentUser?.role === 'DEALER') return <DealerView usdRate={dashboard.usdRate} products={activeProducts} accounts={accounts} orders={orders} initialSession={currentUser} onNotice={setNotice} onRefresh={refresh} />;
     if (detail) return <AccountDetailPage usdRate={dashboard.usdRate} detail={detail} products={products} accounts={accounts} users={users} onCreateUser={createUserForAccount} onBack={() => { setDetail(null); window.history.pushState({}, '', '/'); }} onSale={startAccountSale} onCollection={startAccountCollection} onPurchase={startAccountPurchase} onSupplierPayment={createSupplierPaymentFromDetail} onDebt={sendDebtMessage} onNotice={setNotice} onReload={async () => { await refresh(); setDetail(await apiGet<AccountDetail>(`/accounts/${detail.account.id}`)); }} />;
@@ -483,7 +490,7 @@ export function App() {
     if (active === 'messages') return <MessageTemplatesView templates={messageTemplates} onNotice={setNotice} onRefresh={refresh} />;
     if (active === 'tests') return <PanelTestView onNotice={setNotice} onRefresh={refresh} />;
     return <OperationsView usdRate={dashboard.usdRate} accounts={accounts} products={products} purchases={purchases} quotes={quotes} onDebt={sendDebtMessage} onNotice={setNotice} onRefresh={refresh} />;
-  }, [active, accounts, collections, dashboard, products, purchases, quotes, sales, supplierPayments, categoriesData, detail, productDetailId, orders, paymentLogs, users, currentUser]);
+  }, [active, accounts, collections, dashboard, products, purchases, quotes, sales, supplierPayments, categoriesData, detail, productDetailId, orders, paymentLogs, users, currentUser, apiError]);
 
   if (window.location.pathname === '/login') {
     return <LoginPage onLogin={(token, user) => {
@@ -700,7 +707,7 @@ function AccountsView({ accounts, onAdd, onEdit, onDelete, onDetail, onDebt }: {
   return (
     <DataTable
       title="Cari hesaplar"
-      actions={<Toolbar><FormSelect label="" value={typeFilter} onChange={setTypeFilter} options={['Tumu', 'MUSTERI', 'BAYI', 'TEDARIKCI'].map((item) => ({ label: item, value: item }))} /><FormSelect label="" value={sortBy} onChange={setSortBy} options={[{ label: 'Son islem', value: 'last' }, { label: 'Borc buyukten', value: 'debtDesc' }, { label: 'Borc kucukten', value: 'debtAsc' }, { label: 'Alacak buyukten', value: 'receivableDesc' }, { label: 'Ada gore A-Z', value: 'az' }, { label: 'Ada gore Z-A', value: 'za' }]} /><Button onClick={onAdd} icon={<Plus size={17} />}>Cari ekle</Button><a className="inline-flex h-10 items-center gap-2 rounded border border-line px-3 text-sm font-semibold dark:border-slate-700" href="/api/exports/accounts.xlsx"><FileDown size={17} /> Excel</a></Toolbar>}
+      actions={<Toolbar><FormSelect label="" value={typeFilter} onChange={setTypeFilter} options={['Tumu', 'MUSTERI', 'BAYI', 'TEDARIKCI'].map((item) => ({ label: item, value: item }))} /><FormSelect label="" value={sortBy} onChange={setSortBy} options={[{ label: 'Son islem', value: 'last' }, { label: 'Borc buyukten', value: 'debtDesc' }, { label: 'Borc kucukten', value: 'debtAsc' }, { label: 'Alacak buyukten', value: 'receivableDesc' }, { label: 'Ada gore A-Z', value: 'az' }, { label: 'Ada gore Z-A', value: 'za' }]} /><Button onClick={onAdd} icon={<Plus size={17} />}>Cari ekle</Button><a className="inline-flex h-10 items-center gap-2 rounded border border-line px-3 text-sm font-semibold dark:border-slate-700" href={apiUrl('/exports/accounts.xlsx')}><FileDown size={17} /> Excel</a></Toolbar>}
       headers={['Kod', 'Firma', 'Tip', 'Telefon', 'TL', 'USD', 'Risk', 'Son satis', 'Son tahsilat', 'Islem']}
       rows={filtered.map((account) => [
         account.code,
@@ -2383,13 +2390,13 @@ function DealerView({ usdRate, products, accounts, orders, initialSession, onNot
   const cartUsd = cart.reduce((sum, line) => sum + line.product.dealerUsd * line.quantity, 0);
   const authHeaders = () => ({ Authorization: `Bearer ${localStorage.getItem('erp_token') ?? ''}` });
   async function portalGet<T>(path: string): Promise<T> {
-    const response = await fetch(`/api${path}`, { headers: authHeaders() });
-    if (!response.ok) throw new Error(await response.text());
+    const response = await fetch(apiUrl(path), { headers: authHeaders() });
+    if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
     return response.json() as Promise<T>;
   }
   async function portalPost<T>(path: string, body: unknown): Promise<T> {
-    const response = await fetch(`/api${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
-    if (!response.ok) throw new Error(await response.text());
+    const response = await fetch(apiUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
+    if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
     return response.json() as Promise<T>;
   }
 
@@ -2503,12 +2510,12 @@ function DealerView({ usdRate, products, accounts, orders, initialSession, onNot
   async function changeDealerPassword() {
     try {
       if (passwordForm.password.length < 6) throw new Error('Sifre en az 6 karakter olmali');
-      await fetch('/api/auth/change-password', {
+      await fetch(apiUrl('/auth/change-password'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${passwordForm.token}` },
         body: JSON.stringify({ password: passwordForm.password }),
       }).then(async (response) => {
-        if (!response.ok) throw new Error(await response.text());
+        if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
       });
       const fresh = await apiPost<{ accessToken: string; user: UserSession }>('/auth/login', { email: loginForm.email, password: passwordForm.password });
       localStorage.setItem('erp_token', fresh.accessToken);
@@ -4127,12 +4134,12 @@ function LoginPage({ onLogin }: { onLogin: (token: string, user: UserSession) =>
   async function changePassword() {
     if (!session) return;
     try {
-      const response = await fetch('/api/auth/change-password', {
+      const response = await fetch(apiUrl('/auth/change-password'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.accessToken}` },
         body: JSON.stringify({ password: newPassword }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
       const fresh = await apiPost<{ accessToken: string; user: UserSession }>('/auth/login', { email: form.email, password: newPassword });
       onLogin(fresh.accessToken, { ...fresh.user, mustChangePassword: false });
     } catch (error) {

@@ -339,36 +339,45 @@ export interface Order {
   createdAt: string;
 }
 
+export const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+console.log('API_BASE_URL:', API_BASE_URL);
+
 const jsonHeaders = { 'Content-Type': 'application/json' };
 
+export function apiUrl(path: string) {
+  const normalizedBase = API_BASE_URL.replace(/\/$/, '');
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  return `${normalizedBase}/api${normalizedPath}`;
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(`/api${path}`);
-  if (!response.ok) throw new Error(await response.text());
+  const response = await fetch(apiUrl(path));
+  if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
   return response.json() as Promise<T>;
 }
 
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`/api${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: 'POST',
     headers: jsonHeaders,
     body: JSON.stringify(body ?? {}),
   });
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
   return response.json() as Promise<T>;
 }
 
 export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`/api${path}`, {
+  const response = await fetch(apiUrl(path), {
     method: 'PUT',
     headers: jsonHeaders,
     body: JSON.stringify(body ?? {}),
   });
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
   return response.json() as Promise<T>;
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
-  const response = await fetch(`/api${path}`, { method: 'DELETE' });
-  if (!response.ok) throw new Error(await response.text());
+  const response = await fetch(apiUrl(path), { method: 'DELETE' });
+  if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
   return response.json() as Promise<T>;
 }
