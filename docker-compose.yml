@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: erp_b2b_postgres
+    environment:
+      POSTGRES_USER: erp
+      POSTGRES_PASSWORD: erp_password
+      POSTGRES_DB: erp_b2b
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

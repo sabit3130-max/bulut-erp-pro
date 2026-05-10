@@ -1,0 +1,189 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+  users     User[]
+  accounts  Account[]
+  products  Product[]
+  purchases Purchase[]
+  quotes    Quote[]
+}
+
+model User {
+  id           String   @id @default(uuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role
+  accountId    String?
+  account      Account? @relation(fields: [accountId], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+model Account {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  code        String
+  type        AccountType
+  companyName String
+  contactName String
+  phone       String
+  whatsapp    String
+  email       String
+  taxOffice   String
+  taxNumber   String
+  address     String
+  balanceTry  Decimal  @default(0)
+  balanceUsd  Decimal  @default(0)
+  riskLimit   Decimal  @default(0)
+  dueDay      Int      @default(0)
+  note        String?
+  users       User[]
+  sales       Sale[]
+  payments    Payment[]
+  orders      Order[]
+  purchases   Purchase[]
+  quotes      Quote[]
+}
+
+model Product {
+  id            String   @id @default(uuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  name          String
+  code          String
+  barcode       String?
+  category      String
+  brand         String?
+  description   String?
+  imageUrl      String?
+  warehouse     String
+  stock         Int      @default(0)
+  criticalStock Int      @default(0)
+  purchaseTry   Decimal  @default(0)
+  purchaseUsd   Decimal  @default(0)
+  saleTry       Decimal  @default(0)
+  saleUsd       Decimal  @default(0)
+  dealerTry     Decimal  @default(0)
+  dealerUsd     Decimal  @default(0)
+  fixedTryPrice Boolean  @default(false)
+}
+
+model Sale {
+  id        String   @id @default(uuid())
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id])
+  currency  Currency
+  subtotal  Decimal
+  vat       Decimal
+  discount  Decimal
+  total     Decimal
+  paid      Decimal
+  remaining Decimal
+  createdAt DateTime @default(now())
+}
+
+model Purchase {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  supplierId String
+  supplier   Account  @relation(fields: [supplierId], references: [id])
+  currency   Currency
+  subtotal   Decimal
+  vat        Decimal
+  total      Decimal
+  createdAt  DateTime @default(now())
+}
+
+model Quote {
+  id         String      @id @default(uuid())
+  tenantId   String
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+  accountId  String
+  account    Account     @relation(fields: [accountId], references: [id])
+  currency   Currency
+  subtotal   Decimal
+  vat        Decimal
+  discount   Decimal
+  total      Decimal
+  validUntil DateTime
+  status     QuoteStatus @default(DRAFT)
+  createdAt  DateTime    @default(now())
+}
+
+model Payment {
+  id        String        @id @default(uuid())
+  accountId String
+  account   Account       @relation(fields: [accountId], references: [id])
+  method    PaymentMethod
+  currency  Currency
+  amount    Decimal
+  provider  String?
+  createdAt DateTime      @default(now())
+}
+
+model Order {
+  id        String      @id @default(uuid())
+  accountId String
+  account   Account     @relation(fields: [accountId], references: [id])
+  status    OrderStatus @default(PENDING)
+  totalTry  Decimal     @default(0)
+  totalUsd  Decimal     @default(0)
+  createdAt DateTime    @default(now())
+}
+
+enum Role {
+  ADMIN
+  ACCOUNTING
+  SALES
+  WAREHOUSE
+  DEALER
+  VIEWER
+}
+
+enum AccountType {
+  MUSTERI
+  BAYI
+  TEDARIKCI
+}
+
+enum Currency {
+  TRY
+  USD
+}
+
+enum PaymentMethod {
+  CASH
+  EFT
+  CREDIT_CARD
+  CHECK
+  NOTE
+}
+
+enum OrderStatus {
+  PENDING
+  APPROVED
+  PREPARING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  APPROVED
+}
