@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Account, AccountDetail, apiDelete, apiGet, apiPost, apiPut, apiUrl, Category, Collection, Dashboard, MessageTemplate, Order, PaymentLog, PdfTemplate, Product, Purchase, Quote, Sale, SupplierPayment, TransactionItem, UserSession } from './api';
+import { Account, AccountDetail, apiDelete, apiGet, apiHealthCheck, apiPost, apiPut, apiUrl, Category, Collection, Dashboard, MessageTemplate, Order, PaymentLog, PdfTemplate, Product, Purchase, Quote, Sale, SupplierPayment, TransactionItem, UserSession } from './api';
 
 type Tab = 'dashboard' | 'accounts' | 'products' | 'categories' | 'sales' | 'collections' | 'purchases' | 'dealer' | 'quotes' | 'pdfs' | 'messages' | 'tests' | 'settings';
 type Modal = 'account' | 'product' | null;
@@ -212,6 +212,7 @@ export function App() {
 
   async function refresh() {
     try {
+      await apiHealthCheck();
       const [dashboardData, accountData, productData, saleData, collectionData, purchaseData, supplierPaymentData, quoteData, orderData, logData, categoryData, pdfData, messageData, userData] = await Promise.all([
         apiGet<Dashboard>('/dashboard'),
         apiGet<Account[]>('/accounts'),
@@ -244,8 +245,8 @@ export function App() {
       setMessageTemplates(messageData);
       setUsers(userData);
     } catch {
-      setApiError('API bağlantısı kurulamadı');
-      setNotice('API bağlantısı kurulamadı');
+      setApiError('API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
+      setNotice('API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
     }
   }
 
@@ -2391,12 +2392,12 @@ function DealerView({ usdRate, products, accounts, orders, initialSession, onNot
   const authHeaders = () => ({ Authorization: `Bearer ${localStorage.getItem('erp_token') ?? ''}` });
   async function portalGet<T>(path: string): Promise<T> {
     const response = await fetch(apiUrl(path), { headers: authHeaders() });
-    if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
+    if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
     return response.json() as Promise<T>;
   }
   async function portalPost<T>(path: string, body: unknown): Promise<T> {
     const response = await fetch(apiUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
-    if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
+    if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
     return response.json() as Promise<T>;
   }
 
@@ -2515,7 +2516,7 @@ function DealerView({ usdRate, products, accounts, orders, initialSession, onNot
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${passwordForm.token}` },
         body: JSON.stringify({ password: passwordForm.password }),
       }).then(async (response) => {
-        if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
+        if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
       });
       const fresh = await apiPost<{ accessToken: string; user: UserSession }>('/auth/login', { email: loginForm.email, password: passwordForm.password });
       localStorage.setItem('erp_token', fresh.accessToken);
@@ -4139,7 +4140,7 @@ function LoginPage({ onLogin }: { onLogin: (token: string, user: UserSession) =>
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.accessToken}` },
         body: JSON.stringify({ password: newPassword }),
       });
-      if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
+      if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
       const fresh = await apiPost<{ accessToken: string; user: UserSession }>('/auth/login', { email: form.email, password: newPassword });
       onLogin(fresh.accessToken, { ...fresh.user, mustChangePassword: false });
     } catch (error) {

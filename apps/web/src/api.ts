@@ -352,7 +352,7 @@ export function apiUrl(path: string) {
 
 export async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(apiUrl(path));
-  if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
+  if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
   return response.json() as Promise<T>;
 }
 
@@ -362,7 +362,7 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     headers: jsonHeaders,
     body: JSON.stringify(body ?? {}),
   });
-  if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
+  if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
   return response.json() as Promise<T>;
 }
 
@@ -372,12 +372,20 @@ export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
     headers: jsonHeaders,
     body: JSON.stringify(body ?? {}),
   });
-  if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
+  if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
   return response.json() as Promise<T>;
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
   const response = await fetch(apiUrl(path), { method: 'DELETE' });
-  if (!response.ok) throw new Error((await response.text()) || 'API bağlantısı kurulamadı');
+  if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
   return response.json() as Promise<T>;
+}
+
+export async function apiHealthCheck(): Promise<{ status: 'ok' }> {
+  const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/api/health`);
+  if (!response.ok) throw new Error('API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
+  const data = await response.json() as { status?: string };
+  if (data.status !== 'ok') throw new Error('API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
+  return { status: 'ok' };
 }

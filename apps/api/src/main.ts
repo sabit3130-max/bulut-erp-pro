@@ -12,12 +12,14 @@ async function bootstrap() {
   app.use(urlencoded({ extended: true, limit: '10mb' }));
   app.setGlobalPrefix('api');
   app.enableCors({
-    origin: config.get('WEB_ORIGIN') ?? 'http://localhost:5173',
+    origin: true,
     credentials: true,
   });
   app.use(helmet());
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
-  await app.listen(config.get('PORT') ?? 3001);
+  const port = config.get('PORT') ?? 3000;
+  await app.listen(port);
+  console.log(`API running on port ${port}`);
 }
 
 void bootstrap();
