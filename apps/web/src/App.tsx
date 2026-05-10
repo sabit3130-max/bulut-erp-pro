@@ -3224,12 +3224,21 @@ function IntegrationsView({ accounts, onDebt }: { accounts: Account[]; onDebt: (
 }
 
 function AccountModal({ initial, onClose, onSave }: { initial: Account | null; onClose: () => void; onSave: (payload: Partial<Account>) => void }) {
-  const [form, setForm] = useState<Partial<Account>>(initial ?? { type: 'MUSTERI', dueDay: 30, riskLimit: 50000, balanceTry: 0, balanceUsd: 0 });
+  const generateAccountCode = (type: string) => {
+    const prefix = type === 'TEDARIKCI' ? 'TD' : type === 'BAYI' ? 'BY' : 'CR';
+    const start = type === 'TEDARIKCI' ? 2001 : type === 'BAYI' ? 3001 : 1001;
+    return `${prefix}-${start}`;
+  };
+  const [form, setForm] = useState<Partial<Account>>(initial ?? { type: 'MUSTERI', code: generateAccountCode('MUSTERI'), dueDay: 21, riskLimit: 0, balanceTry: 0, balanceUsd: 0 });
+  const [codeTouched, setCodeTouched] = useState(Boolean(initial?.code));
+  function changeType(type: string) {
+    setForm({ ...form, type, code: codeTouched ? form.code : generateAccountCode(type) });
+  }
   return (
     <ModalFrame title={initial ? 'Cari duzenle' : 'Cari ekle'} onClose={onClose}>
       <FormGrid>
-        <FormInput label="Cari kod" value={form.code} onChange={(code) => setForm({ ...form, code })} />
-        <FormSelect label="Tip" value={form.type ?? 'MUSTERI'} onChange={(type) => setForm({ ...form, type })} options={['MUSTERI', 'BAYI', 'TEDARIKCI'].map((item) => ({ label: item, value: item }))} />
+        <FormInput label="Cari kod" value={form.code} onChange={(code) => { setCodeTouched(true); setForm({ ...form, code }); }} />
+        <FormSelect label="Tip" value={form.type ?? 'MUSTERI'} onChange={changeType} options={['MUSTERI', 'BAYI', 'TEDARIKCI'].map((item) => ({ label: item, value: item }))} />
         <FormInput label="Firma adi" value={form.companyName} onChange={(companyName) => setForm({ ...form, companyName })} />
         <FormInput label="Yetkili" value={form.contactName} onChange={(contactName) => setForm({ ...form, contactName })} />
         <FormInput label="Telefon" value={form.phone} onChange={(phone) => setForm({ ...form, phone })} />
@@ -3241,7 +3250,7 @@ function AccountModal({ initial, onClose, onSave }: { initial: Account | null; o
       </FormGrid>
       <div className="sticky bottom-0 -mx-5 mt-5 flex justify-end gap-2 border-t border-line bg-white px-5 py-4 dark:border-slate-700 dark:bg-[#17202a]">
         <Button variant="soft" onClick={onClose}>Vazgec</Button>
-        <Button disabled={!form.companyName || !form.code} onClick={() => onSave(form)} icon={<Plus size={17} />}>Cariyi kaydet</Button>
+        <Button disabled={!form.companyName} onClick={() => onSave(form)} icon={<Plus size={17} />}>Cariyi kaydet</Button>
       </div>
     </ModalFrame>
   );

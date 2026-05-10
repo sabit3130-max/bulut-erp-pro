@@ -241,12 +241,14 @@ export class DataService {
   }
 
   createAccount(input: Partial<Account> & Record<string, unknown>) {
-    this.validateAccount(input);
-    if (this.accounts.some((item) => item.code === input.code)) throw new BadRequestException('Cari kodu zaten kullaniliyor');
+    const type = input.type ?? 'MUSTERI';
+    const code = String(input.code ?? '').trim() || this.generateAccountCode(type);
+    this.validateAccount({ ...input, type, code });
+    if (this.accounts.some((item) => item.code.toLocaleLowerCase('tr-TR') === code.toLocaleLowerCase('tr-TR'))) throw new BadRequestException('Cari kodu zaten kullaniliyor');
     const account: Account = {
       id: this.nextId('a', this.accounts),
-      code: input.code || `CR-${1000 + this.accounts.length + 1}`,
-      type: input.type ?? 'MUSTERI',
+      code,
+      type,
       companyName: input.companyName || '',
       contactName: input.contactName || '',
       phone: input.phone || '',
@@ -258,7 +260,7 @@ export class DataService {
       balanceTry: Number(input.balanceTry ?? 0),
       balanceUsd: Number(input.balanceUsd ?? 0),
       riskLimit: Number(input.riskLimit ?? 0),
-      dueDay: Number(input.dueDay ?? 30),
+      dueDay: Number(input.dueDay ?? 21),
       note: input.note || '',
     };
     this.accounts.unshift(account);
@@ -1533,6 +1535,27 @@ export class DataService {
     if (!input.companyName?.trim()) throw new BadRequestException('Firma adi zorunlu');
     if (!input.code?.trim()) throw new BadRequestException('Cari kod zorunlu');
     if (Number(input.dueDay ?? 0) < 0) throw new BadRequestException('Vade negatif olamaz');
+  }
+
+  private generateAccountCode(type: Account['type']) {
+    const config = type === 'TEDARIKCI'
+      ? { prefix: 'TD', start: 2001 }
+      : type === 'BAYI'
+        ? { prefix: 'BY', start: 3001 }
+        : { prefix: 'CR', start: 1001 };
+    const used = new Set(this.accounts.map((account) => account.code));
+    let next = this.accounts
+      .filter((account) => account.code.startsWith(`${config.prefix}-`))
+      .reduce((highest, account) => {
+        const numeric = Number(account.code.replace(`${config.prefix}-`, ''));
+        return Number.isFinite(numeric) ? Math.max(highest, numeric + 1) : highest;
+      }, config.start);
+    let code = `${config.prefix}-${next}`;
+    while (used.has(code)) {
+      next += 1;
+      code = `${config.prefix}-${next}`;
+    }
+    return code;
   }
 
   private validateProduct(input: Partial<Product>) {
