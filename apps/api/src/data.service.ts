@@ -317,8 +317,8 @@ export class DataService {
         description: `${collection.method} tahsilat - Tahsilat TL: ${collection.tlAmount ?? (collection.currency === 'TRY' ? collection.amount : 0)} TL, Kur: ${collection.exchangeRate ?? this.usdRate}, USD karsiligi: ${collection.usdAmount ?? (collection.currency === 'USD' ? collection.amount : 0)} USD`,
         debitTry: 0,
         debitUsd: 0,
-        creditTry: collection.appliedToTlBalance ?? (collection.currency === 'TRY' ? collection.amount : 0),
-        creditUsd: collection.appliedToUsdBalance ?? (collection.currency === 'USD' ? collection.amount : 0),
+        creditTry: collection.currency === 'TRY' ? (collection.appliedToTlBalance ?? collection.amount) : 0,
+        creditUsd: collection.currency === 'USD' ? (collection.appliedToUsdBalance ?? collection.amount) : 0,
       })),
       ...purchases.map((purchase) => ({
         id: purchase.id,
@@ -691,27 +691,11 @@ export class DataService {
     let appliedToTlBalance = 0;
     let appliedToUsdBalance = 0;
     if (input.currency === 'TRY') {
-      const previousTry = account.balanceTry;
-      appliedToTlBalance = previousTry > 0 ? Math.min(previousTry, tlAmount) : 0;
-      account.balanceTry -= appliedToTlBalance;
-      const remainingTryPayment = tlAmount - appliedToTlBalance;
-      const usdCapacity = Math.round((remainingTryPayment / this.usdRate) * 100) / 100;
-      appliedToUsdBalance = account.balanceUsd > 0 ? Math.min(account.balanceUsd, usdCapacity) : 0;
-      account.balanceUsd = Math.round((account.balanceUsd - appliedToUsdBalance) * 100) / 100;
-      const usedTry = appliedToTlBalance + appliedToUsdBalance * this.usdRate;
-      const extraTry = Math.round((tlAmount - usedTry) * 100) / 100;
-      if (extraTry > 0) account.balanceTry = Math.round((account.balanceTry - extraTry) * 100) / 100;
+      appliedToTlBalance = account.balanceTry > 0 ? Math.min(account.balanceTry, tlAmount) : 0;
+      account.balanceTry = Math.round((account.balanceTry - tlAmount) * 100) / 100;
     } else {
-      const previousUsd = account.balanceUsd;
-      appliedToUsdBalance = previousUsd > 0 ? Math.min(previousUsd, usdAmount) : 0;
-      account.balanceUsd = Math.round((account.balanceUsd - appliedToUsdBalance) * 100) / 100;
-      const remainingUsdPayment = usdAmount - appliedToUsdBalance;
-      const tryCapacity = Math.round(remainingUsdPayment * this.usdRate * 100) / 100;
-      appliedToTlBalance = account.balanceTry > 0 ? Math.min(account.balanceTry, tryCapacity) : 0;
-      account.balanceTry = Math.round((account.balanceTry - appliedToTlBalance) * 100) / 100;
-      const usedUsd = appliedToUsdBalance + appliedToTlBalance / this.usdRate;
-      const extraUsd = Math.round((usdAmount - usedUsd) * 100) / 100;
-      if (extraUsd > 0) account.balanceUsd = Math.round((account.balanceUsd - extraUsd) * 100) / 100;
+      appliedToUsdBalance = account.balanceUsd > 0 ? Math.min(account.balanceUsd, usdAmount) : 0;
+      account.balanceUsd = Math.round((account.balanceUsd - usdAmount) * 100) / 100;
     }
     const collection: Collection = {
       id: this.nextId('c', this.collections),
@@ -1260,7 +1244,7 @@ export class DataService {
 
   whatsappDebtReminder(accountId: string) {
     const account = this.findAccount(accountId);
-    const message = `Merhaba ${account.contactName}, cari hesabinizda ${account.balanceTry} TL / ${account.balanceUsd} USD odenmemis bakiye bulunmaktadir. Firma`;
+    const message = `Sayin ${account.contactName || account.companyName},\n\nGuncel cari bakiyeniz:\nTL bakiye: ${account.balanceTry} TL\nUSD bakiye: ${account.balanceUsd} USD\n\nIyi calismalar.`;
     return { to: account.whatsapp, message, link: this.whatsappLink(account.whatsapp, message) };
   }
 

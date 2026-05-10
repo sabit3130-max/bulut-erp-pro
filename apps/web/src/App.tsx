@@ -2290,25 +2290,13 @@ function SaleSummaryLine({ label, currency, tryValue, usdValue, strong }: { labe
   return <div className={`flex items-center justify-between rounded-2xl border dark:border-slate-700 ${isTotal ? 'border-ocean bg-gradient-to-br from-ocean to-[#0e5c70] p-5 text-white shadow-lg shadow-ocean/20' : strong ? 'border-line bg-slate-50 p-4 shadow-sm dark:bg-slate-900' : 'border-line bg-white/60 p-3 shadow-sm dark:bg-slate-900/40'}`}><span className={`font-bold ${isTotal ? 'text-base text-white' : 'text-sm text-slate-500'}`}>{label}</span><div className={isTotal ? 'scale-110 origin-right' : ''}><PriorityMoney currency={currency} tryValue={tryValue} usdValue={usdValue} /></div></div>;
 }
 
-function previewCollection(account: Account | undefined, tryAmount: number, usdAmount: number, rate: number) {
+function previewCollection(account: Account | undefined, tryAmount: number, usdAmount: number, _rate: number) {
   let remainingTry = account?.balanceTry ?? 0;
   let remainingUsd = account?.balanceUsd ?? 0;
   if (usdAmount > 0 && tryAmount <= 0) {
-    const appliedUsd = remainingUsd > 0 ? Math.min(remainingUsd, usdAmount) : 0;
-    remainingUsd = Math.round((remainingUsd - appliedUsd) * 100) / 100;
-    const tryCapacity = Math.round((usdAmount - appliedUsd) * rate * 100) / 100;
-    const appliedTry = remainingTry > 0 ? Math.min(remainingTry, tryCapacity) : 0;
-    remainingTry = Math.round((remainingTry - appliedTry) * 100) / 100;
-    const extraUsd = Math.round((usdAmount - appliedUsd - appliedTry / rate) * 100) / 100;
-    if (extraUsd > 0) remainingUsd = Math.round((remainingUsd - extraUsd) * 100) / 100;
+    remainingUsd = Math.round((remainingUsd - usdAmount) * 100) / 100;
   } else {
-    const appliedTry = remainingTry > 0 ? Math.min(remainingTry, tryAmount) : 0;
-    remainingTry = Math.round((remainingTry - appliedTry) * 100) / 100;
-    const usdCapacity = Math.round(((tryAmount - appliedTry) / rate) * 100) / 100;
-    const appliedUsd = remainingUsd > 0 ? Math.min(remainingUsd, usdCapacity) : 0;
-    remainingUsd = Math.round((remainingUsd - appliedUsd) * 100) / 100;
-    const extraTry = Math.round((tryAmount - appliedTry - appliedUsd * rate) * 100) / 100;
-    if (extraTry > 0) remainingTry = Math.round((remainingTry - extraTry) * 100) / 100;
+    remainingTry = Math.round((remainingTry - tryAmount) * 100) / 100;
   }
   return { remainingTry, remainingUsd };
 }
@@ -3360,8 +3348,8 @@ function ProductModal({ initial, products, categories, usdRate, onClose, onSave,
 
 function AccountDetailPage({ usdRate, detail, products, accounts, users, onCreateUser, onBack, onSale, onCollection, onPurchase, onSupplierPayment, onDebt, onNotice, onReload }: { usdRate: number; detail: AccountDetail; products: Product[]; accounts: Account[]; users: UserSession[]; onCreateUser: (payload: { name: string; email: string; username?: string; password: string; role: 'CUSTOMER' | 'DEALER'; accountId: string; phone?: string }) => Promise<UserSession>; onBack: () => void; onSale: (id: string) => void; onCollection: (id: string) => void; onPurchase: (id: string) => void; onSupplierPayment: (id: string, payload: { date: string; currency: 'TRY' | 'USD'; amount: number; method: string; description: string }) => Promise<void>; onDebt: (id: string) => void; onNotice: (message: string) => void; onReload: () => Promise<void> }) {
   const { account } = detail;
-  const debtTry = account.balanceTry + tryFromUsd(account.balanceUsd, usdRate);
-  const debtUsd = account.balanceUsd + usdFromTry(account.balanceTry, usdRate);
+  const totalRevenueTry = detail.sales.reduce((sum, sale) => sum + (sale.currency === 'TRY' ? sale.total : 0), 0);
+  const totalRevenueUsd = detail.sales.reduce((sum, sale) => sum + (sale.currency === 'USD' ? sale.total : 0), 0);
   const [tab, setTab] = useState('Cari Ekstre');
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [collectionOpen, setCollectionOpen] = useState(false);
@@ -3461,7 +3449,7 @@ function AccountDetailPage({ usdRate, detail, products, accounts, users, onCreat
           {accountSummary.map(([label, value, tone]) => <SummaryCard key={label} label={label} value={value} tone={tone} />)}
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded border border-line bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900"><div className="text-sm text-slate-500">Toplam borc</div><div className="mt-2"><DualMoney tryValue={debtTry} usdValue={debtUsd} /></div></div>
+          <div className="rounded border border-line bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900"><div className="text-sm text-slate-500">Toplam ciro</div><div className="mt-2"><DualMoney tryValue={totalRevenueTry} usdValue={totalRevenueUsd} /></div></div>
           <div className="rounded border border-line bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900"><div className="text-sm text-slate-500">Kalan bakiye</div><div className="mt-2"><DualMoney tryValue={account.balanceTry} usdValue={account.balanceUsd} /></div></div>
         </div>
       </Panel>
