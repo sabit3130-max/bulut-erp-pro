@@ -3874,6 +3874,7 @@ function SaleEditModal({ sale, products, accounts, fallbackRate, onClose, onNoti
   const [discount, setDiscount] = useState(sale.discount);
   const [description, setDescription] = useState(sale.description ?? '');
   const [date, setDate] = useState(sale.createdAt.slice(0, 10));
+  const [saving, setSaving] = useState(false);
   const [lines, setLines] = useState(() => (sale.items?.length ? sale.items : []).map((item) => ({
     productId: item.productId,
     quantity: item.quantity,
@@ -3895,10 +3896,12 @@ function SaleEditModal({ sale, products, accounts, fallbackRate, onClose, onNoti
     updateLine(index, { productId, unitPriceTry: product?.saleTry ?? 0, unitPriceUsd: product?.saleUsd ?? 0, vatRate: product?.vatRate ?? 20 });
   }
   async function save() {
+    if (saving) return;
     if (!accountId || !lines.length || lines.some((line) => !line.productId || Number(line.quantity) <= 0)) {
       onNotice('Satis duzenlemek icin cari ve urun satirlari zorunlu');
       return;
     }
+    setSaving(true);
     try {
       const updated = await apiPut<Sale>(`/sales/${sale.id}`, {
         accountId,
@@ -3916,10 +3919,13 @@ function SaleEditModal({ sale, products, accounts, fallbackRate, onClose, onNoti
           vatRate: Number(line.vatRate),
         })),
       });
-      onNotice('Satis guncellendi. Stok ve cari bakiye yeniden hesaplandi.');
+      onNotice('Satış güncellendi');
       await onSaved(updated);
     } catch (error) {
-      onNotice(errorMessage(error));
+      console.error('Satış güncellenemedi', error);
+      onNotice('Satış güncellenemedi');
+    } finally {
+      setSaving(false);
     }
   }
   return (
@@ -3954,7 +3960,7 @@ function SaleEditModal({ sale, products, accounts, fallbackRate, onClose, onNoti
           <DualSummary label="Genel toplam" tryValue={currency === 'TRY' ? total : tryFromUsd(total, rate)} usdValue={currency === 'USD' ? total : usdFromTry(total, rate)} strong />
           <DualSummary label="Kalan" tryValue={currency === 'TRY' ? total - paid : tryFromUsd(total - paid, rate)} usdValue={currency === 'USD' ? total - paid : usdFromTry(total - paid, rate)} />
         </div>
-        <div className="flex justify-end gap-2 border-t border-line pt-4 dark:border-slate-700"><Button variant="soft" onClick={onClose}>Vazgec</Button><Button onClick={save}>Kaydet</Button></div>
+        <div className="flex justify-end gap-2 border-t border-line pt-4 dark:border-slate-700"><Button variant="soft" onClick={onClose}>Vazgec</Button><Button onClick={save}>{saving ? 'Kaydediliyor...' : 'Kaydet'}</Button></div>
       </div>
     </ModalFrame>
   );

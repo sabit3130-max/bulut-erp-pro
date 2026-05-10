@@ -1,10 +1,39 @@
-import { Body, Controller, Delete, Get, Header, Headers, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Headers, Param, Patch, Post, Put } from '@nestjs/common';
 import { DataService } from './data.service';
 import { Account, Category, MessageTemplate, PdfTemplate, Product } from './types';
 
 @Controller()
 export class BusinessController {
   constructor(private readonly data: DataService) {}
+
+  private normalizeSaleUpdate(body: {
+    accountId?: string;
+    cariId?: string;
+    items?: { productId: string; quantity: number; unitPrice?: number; unitPriceTry?: number; unitPriceUsd?: number; vatRate?: number }[];
+    currency?: 'TRY' | 'USD';
+    paraBirimi?: 'TRY' | 'USD';
+    paid?: number;
+    odenen?: number;
+    discount?: number;
+    iskonto?: number;
+    date?: string;
+    tarih?: string;
+    paymentMethod?: 'Nakit' | 'Havale/EFT' | 'Kredi karti' | 'Cek' | 'Senet' | 'Vadeli';
+    odemeTipi?: 'Nakit' | 'Havale/EFT' | 'Kredi karti' | 'Cek' | 'Senet' | 'Vadeli';
+    description?: string;
+    aciklama?: string;
+  }) {
+    return {
+      accountId: body.accountId ?? body.cariId,
+      items: body.items,
+      currency: body.currency ?? body.paraBirimi,
+      paid: body.paid ?? body.odenen,
+      discount: body.discount ?? body.iskonto,
+      date: body.date ?? body.tarih,
+      paymentMethod: body.paymentMethod ?? body.odemeTipi,
+      description: body.description ?? body.aciklama,
+    };
+  }
 
   @Get('dashboard')
   dashboard() {
@@ -142,8 +171,13 @@ export class BusinessController {
   }
 
   @Put('sales/:id')
-  updateSale(@Param('id') id: string, @Body() body: { accountId?: string; items?: { productId: string; quantity: number; unitPrice?: number; unitPriceTry?: number; unitPriceUsd?: number; vatRate?: number }[]; currency?: 'TRY' | 'USD'; paid?: number; discount?: number; date?: string; paymentMethod?: 'Nakit' | 'Havale/EFT' | 'Kredi karti' | 'Cek' | 'Senet' | 'Vadeli'; description?: string }) {
-    return this.data.updateSale(id, body);
+  updateSale(@Param('id') id: string, @Body() body: Parameters<BusinessController['normalizeSaleUpdate']>[0]) {
+    return this.data.updateSale(id, this.normalizeSaleUpdate(body));
+  }
+
+  @Patch('sales/:id')
+  patchSale(@Param('id') id: string, @Body() body: Parameters<BusinessController['normalizeSaleUpdate']>[0]) {
+    return this.data.updateSale(id, this.normalizeSaleUpdate(body));
   }
 
   @Get('collections')
