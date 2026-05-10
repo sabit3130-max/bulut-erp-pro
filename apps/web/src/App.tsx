@@ -2294,9 +2294,27 @@ function previewCollection(account: Account | undefined, tryAmount: number, usdA
   let remainingTry = account?.balanceTry ?? 0;
   let remainingUsd = account?.balanceUsd ?? 0;
   if (usdAmount > 0 && tryAmount <= 0) {
-    remainingUsd = Math.round((remainingUsd - usdAmount) * 100) / 100;
+    let remainingUsdPayment = usdAmount;
+    if (remainingUsd > 0) {
+      const appliedUsd = Math.min(remainingUsd, remainingUsdPayment);
+      remainingUsd = roundMoney(remainingUsd - appliedUsd);
+      remainingUsdPayment = roundMoney(remainingUsdPayment - appliedUsd);
+    }
+    if (remainingUsdPayment > 0 && remainingTry > 0) {
+      const appliedTry = Math.min(remainingTry, roundMoney(remainingUsdPayment * _rate));
+      remainingTry = roundMoney(remainingTry - appliedTry);
+    }
   } else {
-    remainingTry = Math.round((remainingTry - tryAmount) * 100) / 100;
+    let remainingTryPayment = tryAmount;
+    if (remainingTry > 0) {
+      const appliedTry = Math.min(remainingTry, remainingTryPayment);
+      remainingTry = roundMoney(remainingTry - appliedTry);
+      remainingTryPayment = roundMoney(remainingTryPayment - appliedTry);
+    }
+    if (remainingTryPayment > 0 && remainingUsd > 0) {
+      const appliedUsd = Math.min(remainingUsd, roundMoney(remainingTryPayment / _rate));
+      remainingUsd = roundMoney(remainingUsd - appliedUsd);
+    }
   }
   return { remainingTry, remainingUsd };
 }
@@ -3357,8 +3375,10 @@ function ProductModal({ initial, products, categories, usdRate, onClose, onSave,
 
 function AccountDetailPage({ usdRate, detail, products, accounts, users, onCreateUser, onBack, onSale, onCollection, onPurchase, onSupplierPayment, onDebt, onNotice, onReload }: { usdRate: number; detail: AccountDetail; products: Product[]; accounts: Account[]; users: UserSession[]; onCreateUser: (payload: { name: string; email: string; username?: string; password: string; role: 'CUSTOMER' | 'DEALER'; accountId: string; phone?: string }) => Promise<UserSession>; onBack: () => void; onSale: (id: string) => void; onCollection: (id: string) => void; onPurchase: (id: string) => void; onSupplierPayment: (id: string, payload: { date: string; currency: 'TRY' | 'USD'; amount: number; method: string; description: string }) => Promise<void>; onDebt: (id: string) => void; onNotice: (message: string) => void; onReload: () => Promise<void> }) {
   const { account } = detail;
-  const totalRevenueTry = detail.sales.reduce((sum, sale) => sum + (sale.currency === 'TRY' ? sale.total : 0), 0);
-  const totalRevenueUsd = detail.sales.reduce((sum, sale) => sum + (sale.currency === 'USD' ? sale.total : 0), 0);
+  const totalRevenueTry = account.totalRevenueTry ?? detail.sales.reduce((sum, sale) => sum + (sale.currency === 'TRY' ? sale.total : 0), 0);
+  const totalRevenueUsd = account.totalRevenueUsd ?? detail.sales.reduce((sum, sale) => sum + (sale.currency === 'USD' ? sale.total : 0), 0);
+  const remainingDebtTry = Math.max(0, account.balanceTry);
+  const remainingDebtUsd = Math.max(0, account.balanceUsd);
   const [tab, setTab] = useState('Cari Ekstre');
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [collectionOpen, setCollectionOpen] = useState(false);
@@ -3459,7 +3479,7 @@ function AccountDetailPage({ usdRate, detail, products, accounts, users, onCreat
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div className="rounded border border-line bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900"><div className="text-sm text-slate-500">Toplam ciro</div><div className="mt-2"><DualMoney tryValue={totalRevenueTry} usdValue={totalRevenueUsd} /></div></div>
-          <div className="rounded border border-line bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900"><div className="text-sm text-slate-500">Kalan bakiye</div><div className="mt-2"><DualMoney tryValue={account.balanceTry} usdValue={account.balanceUsd} /></div></div>
+          <div className="rounded border border-line bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900"><div className="text-sm text-slate-500">Kalan bakiye</div><div className="mt-2"><DualMoney tryValue={remainingDebtTry} usdValue={remainingDebtUsd} /></div></div>
         </div>
       </Panel>
       <div className="flex flex-wrap gap-2">

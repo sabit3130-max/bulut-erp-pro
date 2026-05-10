@@ -26,6 +26,8 @@ export interface Account {
   lastSaleDate?: string;
   lastPurchaseDate?: string;
   lastTransactionDate?: string;
+  totalRevenueTry?: number;
+  totalRevenueUsd?: number;
 }
 
 export interface UserSession {

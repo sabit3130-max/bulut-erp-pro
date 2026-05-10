@@ -319,11 +319,11 @@ export class DataService {
         id: collection.id,
         date: collection.createdAt,
         type: 'Tahsilat',
-        description: `${collection.method} tahsilat - Tahsilat TL: ${collection.tlAmount ?? (collection.currency === 'TRY' ? collection.amount : 0)} TL, Kur: ${collection.exchangeRate ?? this.usdRate}, USD karsiligi: ${collection.usdAmount ?? (collection.currency === 'USD' ? collection.amount : 0)} USD`,
+        description: this.collectionLedgerDescription(collection),
         debitTry: 0,
         debitUsd: 0,
-        creditTry: collection.currency === 'TRY' ? (collection.appliedToTlBalance ?? collection.amount) : 0,
-        creditUsd: collection.currency === 'USD' ? (collection.appliedToUsdBalance ?? collection.amount) : 0,
+        creditTry: collection.appliedToTlBalance ?? (collection.currency === 'TRY' ? collection.amount : 0),
+        creditUsd: collection.appliedToUsdBalance ?? (collection.currency === 'USD' ? collection.amount : 0),
       })),
       ...purchases.map((purchase) => ({
         id: purchase.id,
@@ -693,15 +693,7 @@ export class DataService {
     const amount = this.number(input.amount);
     const tlAmount = input.currency === 'TRY' ? amount : Math.round(amount * this.usdRate * 100) / 100;
     const usdAmount = input.currency === 'USD' ? amount : Math.round((amount / this.usdRate) * 100) / 100;
-    let appliedToTlBalance = 0;
-    let appliedToUsdBalance = 0;
-    if (input.currency === 'TRY') {
-      appliedToTlBalance = account.balanceTry > 0 ? Math.min(account.balanceTry, tlAmount) : 0;
-      account.balanceTry = Math.round((account.balanceTry - tlAmount) * 100) / 100;
-    } else {
-      appliedToUsdBalance = account.balanceUsd > 0 ? Math.min(account.balanceUsd, usdAmount) : 0;
-      account.balanceUsd = Math.round((account.balanceUsd - usdAmount) * 100) / 100;
-    }
+    const balanceResult = this.applyCollectionToAccount(account, input.currency, amount, this.usdRate);
     const collection: Collection = {
       id: this.nextId('c', this.collections),
       createdAt: input.date ?? new Date().toISOString(),
@@ -710,8 +702,8 @@ export class DataService {
       tlAmount,
       usdAmount,
       exchangeRate: this.usdRate,
-      appliedToTlBalance: Math.round(appliedToTlBalance * 100) / 100,
-      appliedToUsdBalance: Math.round(appliedToUsdBalance * 100) / 100,
+      appliedToTlBalance: balanceResult.appliedToTlBalance,
+      appliedToUsdBalance: balanceResult.appliedToUsdBalance,
       remainingTlBalance: account.balanceTry,
       remainingUsdBalance: account.balanceUsd,
       status: 'basarili',
@@ -1249,7 +1241,8 @@ export class DataService {
 
   whatsappDebtReminder(accountId: string) {
     const account = this.findAccount(accountId);
-    const message = `Sayin ${account.contactName || account.companyName},\n\nGuncel cari bakiyeniz:\nTL bakiye: ${account.balanceTry} TL\nUSD bakiye: ${account.balanceUsd} USD\n\nIyi calismalar.`;
+    const balance = this.accountBalanceSummary(account);
+    const message = `Sayin ${account.contactName || account.companyName},\n\nGuncel cari bakiyeniz:\nTL bakiye: ${balance.balanceTry} TL\nUSD bakiye: ${balance.balanceUsd} USD\n\nIyi calismalar.`;
     return { to: account.whatsapp, message, link: this.whatsappLink(account.whatsapp, message) };
   }
 
@@ -1633,13 +1626,68 @@ export class DataService {
     return category;
   }
 
+  private applyCollectionToAccount(account: Account, currency: Currency, amount: number, rate: number) {
+    let appliedToTlBalance = 0;
+    let appliedToUsdBalance = 0;
+
+    if (currency === 'TRY') {
+      let remainingTryPayment = amount;
+      if (account.balanceTry > 0) {
+        appliedToTlBalance = Math.min(account.balanceTry, remainingTryPayment);
+        account.balanceTry = this.round(account.balanceTry - appliedToTlBalance);
+        remainingTryPayment = this.round(remainingTryPayment - appliedToTlBalance);
+      }
+      if (remainingTryPayment > 0 && account.balanceUsd > 0) {
+        const usdCapacity = this.round(remainingTryPayment / rate);
+        appliedToUsdBalance = Math.min(account.balanceUsd, usdCapacity);
+        account.balanceUsd = this.round(account.balanceUsd - appliedToUsdBalance);
+      }
+    } else {
+      let remainingUsdPayment = amount;
+      if (account.balanceUsd > 0) {
+        appliedToUsdBalance = Math.min(account.balanceUsd, remainingUsdPayment);
+        account.balanceUsd = this.round(account.balanceUsd - appliedToUsdBalance);
+        remainingUsdPayment = this.round(remainingUsdPayment - appliedToUsdBalance);
+      }
+      if (remainingUsdPayment > 0 && account.balanceTry > 0) {
+        const tryCapacity = this.round(remainingUsdPayment * rate);
+        appliedToTlBalance = Math.min(account.balanceTry, tryCapacity);
+        account.balanceTry = this.round(account.balanceTry - appliedToTlBalance);
+      }
+    }
+
+    return {
+      appliedToTlBalance: this.round(appliedToTlBalance),
+      appliedToUsdBalance: this.round(appliedToUsdBalance),
+    };
+  }
+
+  private collectionLedgerDescription(collection: Collection) {
+    const rate = collection.exchangeRate || this.usdRate;
+    const tlAmount = collection.tlAmount ?? (collection.currency === 'TRY' ? collection.amount : this.round(collection.amount * rate));
+    const usdAmount = collection.usdAmount ?? (collection.currency === 'USD' ? collection.amount : this.round(collection.amount / rate));
+    if (collection.currency === 'TRY' && (collection.appliedToUsdBalance ?? 0) > 0) {
+      return `${collection.method} tahsilat - ${tlAmount} TL tahsilat / ${usdAmount} USD karsiligi`;
+    }
+    if (collection.currency === 'USD' && (collection.appliedToTlBalance ?? 0) > 0) {
+      return `${collection.method} tahsilat - ${usdAmount} USD tahsilat / ${tlAmount} TL karsiligi`;
+    }
+    return `${collection.method} tahsilat - ${tlAmount} TL / ${usdAmount} USD`;
+  }
+
   private enrichAccount(account: Account) {
     const saleDates = this.sales.filter((item) => this.saleBelongsToAccount(item, account)).map((item) => item.createdAt);
     const collectionDates = this.collections.filter((item) => item.accountId === account.id && item.status !== 'basarisiz').map((item) => item.createdAt);
     const purchaseDates = this.purchases.filter((item) => item.supplierId === account.id).map((item) => item.createdAt);
     const allDates = [...saleDates, ...collectionDates, ...purchaseDates, ...this.supplierPayments.filter((item) => item.supplierId === account.id).map((item) => item.createdAt)].sort((a, b) => b.localeCompare(a));
+    const sales = this.sales.filter((item) => this.saleBelongsToAccount(item, account));
+    const balance = this.accountBalanceSummary(account);
     return {
       ...account,
+      balanceTry: balance.balanceTry,
+      balanceUsd: balance.balanceUsd,
+      totalRevenueTry: this.round(sales.filter((sale) => sale.currency === 'TRY').reduce((sum, sale) => sum + sale.total, 0)),
+      totalRevenueUsd: this.round(sales.filter((sale) => sale.currency === 'USD').reduce((sum, sale) => sum + sale.total, 0)),
       lastSaleDate: saleDates.sort((a, b) => b.localeCompare(a))[0] || account.lastSaleDate,
       lastCollectionDate: collectionDates.sort((a, b) => b.localeCompare(a))[0] || account.lastCollectionDate,
       lastPurchaseDate: purchaseDates.sort((a, b) => b.localeCompare(a))[0] || account.lastPurchaseDate,
@@ -1653,6 +1701,26 @@ export class DataService {
 
   private toTry(value: number, currency: Currency) {
     return currency === 'USD' ? value * this.usdRate : value;
+  }
+
+  private accountBalanceSummary(account: Account) {
+    let balanceTry = this.round(account.balanceTry);
+    let balanceUsd = this.round(account.balanceUsd);
+    if (balanceTry < 0 && balanceUsd > 0) {
+      const usdOffset = Math.min(balanceUsd, this.round(Math.abs(balanceTry) / this.usdRate));
+      balanceUsd = this.round(balanceUsd - usdOffset);
+      balanceTry = 0;
+    }
+    if (balanceUsd < 0 && balanceTry > 0) {
+      const tryOffset = Math.min(balanceTry, this.round(Math.abs(balanceUsd) * this.usdRate));
+      balanceTry = this.round(balanceTry - tryOffset);
+      balanceUsd = 0;
+    }
+    return { balanceTry, balanceUsd };
+  }
+
+  private round(value: number) {
+    return Math.round(value * 100) / 100;
   }
 
   private number(value: unknown, fallback = 0) {
