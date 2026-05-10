@@ -1453,16 +1453,14 @@ export class DataService {
   }
 
   private bootstrapAdminFromEnv() {
-    const email = String(process.env.ADMIN_EMAIL ?? '').trim().toLocaleLowerCase('tr-TR');
-    const password = String(process.env.ADMIN_PASSWORD ?? '');
-    if (!email || !password) return;
+    if (this.users.some((user) => user.role === 'ADMIN')) return;
+    const email = String(process.env.ADMIN_EMAIL || 'admin@buluterp.local').trim().toLocaleLowerCase('tr-TR');
+    const password = String(process.env.ADMIN_PASSWORD || 'Admin123!');
     if (password.length < 8) {
       console.warn('ADMIN_PASSWORD en az 8 karakter olmali; admin bootstrap atlandi.');
       return;
     }
     const username = String(process.env.ADMIN_USERNAME ?? email).trim().toLocaleLowerCase('tr-TR');
-    const existing = this.users.some((user) => user.email.toLocaleLowerCase('tr-TR') === email || user.username?.toLocaleLowerCase('tr-TR') === username);
-    if (existing) return;
     this.users.push({
       id: this.nextId('u', this.users),
       name: process.env.ADMIN_NAME || 'Sistem Yoneticisi',

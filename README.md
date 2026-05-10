@@ -35,9 +35,9 @@ JWT_SECRET=change-this-in-production
 DATABASE_URL=postgresql://erp:erp_password@localhost:5432/erp_b2b?schema=public
 WEB_ORIGIN=https://erp.siteniz.com
 VITE_API_URL=https://api.erp.siteniz.com
-ADMIN_EMAIL=admin@siteniz.com
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=guclu-gecici-sifre
+ADMIN_EMAIL=admin@buluterp.local
+ADMIN_USERNAME=admin@buluterp.local
+ADMIN_PASSWORD=Admin123!
 ADMIN_NAME=Sistem Yoneticisi
 ADMIN_MUST_CHANGE_PASSWORD=true
 AUTO_BACKUP_ENABLED=true
@@ -48,7 +48,7 @@ AUTO_BACKUP_INTERVAL_HOURS=24
 
 ## Kullanici Girisleri
 
-Canli sistemde varsayilan demo kullanici olusturulmaz. Ilk admin kullanicisi sadece `ADMIN_EMAIL` ve `ADMIN_PASSWORD` ortam degiskenleri verilirse otomatik olusturulur. Bu islem demo veri eklemez; ayni e-posta veya kullanici adi varsa mevcut canli kullanici korunur.
+Canli sistemde varsayilan demo veri olusturulmaz. Sistemde hic `ADMIN` kullanici yoksa varsayilan admin otomatik olusturulur: `admin@buluterp.local` / `Admin123!`. Sifre hashli saklanir ve ilk giriste sifre degistirme zorunludur. Ortam degiskenleriyle farkli ilk admin bilgisi verebilirsiniz.
 
 Sifreler API tarafinda hashlenmis olarak tutulur; login JWT token dondurur. Musteri/bayi girisi icin ayrica:
 
@@ -61,7 +61,7 @@ Sifreler API tarafinda hashlenmis olarak tutulur; login JWT token dondurur. Must
 - Admin gecici sifre uretebilir; ilk giriste musteri yeni sifre belirler.
 - Kullanici adi veya e-posta ile giris desteklenir.
 - Portal endpointleri token uzerindeki `accountId` ile calisir; musteri/bayi baska carinin verisini gormez.
-- Kullanici ve yedek endpointleri admin token ister; pasif kullanici giris yapamaz.
+- Admin paneline sadece `ADMIN` rolu girebilir. Kullanici ve yedek endpointleri admin token ister; pasif kullanici giris yapamaz.
 
 ## Kalici Veri
 
@@ -138,7 +138,7 @@ Prisma semasi `apps/api/prisma/schema.prisma` icindedir. Canli kurulumda onerile
 ## Canli Domain, SSL ve Pilot Sirasi
 
 1. Demo veri otomatik olusmadigini dogrulayin.
-2. `ADMIN_EMAIL` / `ADMIN_PASSWORD` ile ilk admini olusturun.
+2. Varsayilan adminle giris yapin veya `ADMIN_EMAIL` / `ADMIN_PASSWORD` ile ilk admini ozellestirin.
 3. Admin olarak girip `Kullanicilar` ekranindan personel ve bayi kullanicilarini acin.
 4. `/bayi-giris` uzerinden bir bayi ile giris testi yapin.
 5. `AUTO_BACKUP_ENABLED=true` ile otomatik yedegi acip ilk yedek dosyasinin olustugunu kontrol edin.

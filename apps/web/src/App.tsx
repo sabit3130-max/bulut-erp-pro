@@ -532,6 +532,16 @@ export function App() {
   }
 
   const portalOnly = currentUser?.role === 'CUSTOMER' || currentUser?.role === 'DEALER';
+  if (currentUser && !portalOnly && currentUser.role !== 'ADMIN') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6 dark:bg-slate-950">
+        <div className="w-full max-w-lg space-y-4">
+          <AccessDenied />
+          <Button onClick={logout}>Cikis yap</Button>
+        </div>
+      </div>
+    );
+  }
   const visibleTabs = portalOnly ? tabs.filter((tab) => tab.id === 'dealer') : tabs.filter((tab) => tab.id !== 'users' || currentUser?.role === 'ADMIN');
 
   return (
@@ -4210,14 +4220,14 @@ function LoginPage({ mode = 'any', onLogin }: { mode?: 'any' | 'admin' | 'portal
   const [form, setForm] = useState({ email: '', password: '' });
   const [newPassword, setNewPassword] = useState('');
   const [session, setSession] = useState<{ accessToken: string; user: UserSession } | null>(null);
-  const [message, setMessage] = useState(mode === 'portal' ? 'Musteri veya bayi hesabinizla giris yapin.' : 'Admin veya personel hesabinizla giris yapin.');
+  const [message, setMessage] = useState(mode === 'portal' ? 'Musteri veya bayi hesabinizla giris yapin.' : 'Admin hesabinizla giris yapin.');
 
   async function login() {
     try {
       const result = await apiPost<{ accessToken: string; user: UserSession }>('/auth/login', form);
       const portalRole = result.user.role === 'CUSTOMER' || result.user.role === 'DEALER';
       if (mode === 'portal' && !portalRole) throw new Error('Bu sayfaya sadece musteri veya bayi kullanicisi girebilir.');
-      if (mode === 'admin' && portalRole) throw new Error('Bu sayfaya sadece admin veya personel kullanicisi girebilir.');
+      if (mode === 'admin' && result.user.role !== 'ADMIN') throw new Error('Bu sayfaya sadece ADMIN kullanicisi girebilir.');
       if (result.user.mustChangePassword) {
         setSession(result);
         setMessage('Ilk giris: lutfen yeni sifrenizi belirleyin.');
@@ -4241,7 +4251,7 @@ function LoginPage({ mode = 'any', onLogin }: { mode?: 'any' | 'admin' | 'portal
       const fresh = await apiPost<{ accessToken: string; user: UserSession }>('/auth/login', { email: form.email, password: newPassword });
       const portalRole = fresh.user.role === 'CUSTOMER' || fresh.user.role === 'DEALER';
       if (mode === 'portal' && !portalRole) throw new Error('Bu sayfaya sadece musteri veya bayi kullanicisi girebilir.');
-      if (mode === 'admin' && portalRole) throw new Error('Bu sayfaya sadece admin veya personel kullanicisi girebilir.');
+      if (mode === 'admin' && fresh.user.role !== 'ADMIN') throw new Error('Bu sayfaya sadece ADMIN kullanicisi girebilir.');
       onLogin(fresh.accessToken, { ...fresh.user, mustChangePassword: false });
     } catch (error) {
       setMessage(errorMessage(error));
