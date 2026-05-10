@@ -35,7 +35,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } 
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Account, AccountDetail, apiDelete, apiGet, apiHealthCheck, apiPost, apiPut, apiUrl, Category, Collection, Dashboard, MessageTemplate, Order, PaymentLog, PdfTemplate, Product, Purchase, Quote, Sale, SupplierPayment, TransactionItem, UserSession } from './api';
 
-type Tab = 'dashboard' | 'accounts' | 'products' | 'categories' | 'sales' | 'collections' | 'purchases' | 'dealer' | 'quotes' | 'pdfs' | 'messages' | 'tests' | 'settings';
+type Tab = 'dashboard' | 'accounts' | 'products' | 'categories' | 'sales' | 'collections' | 'purchases' | 'dealer' | 'quotes' | 'pdfs' | 'messages' | 'users' | 'tests' | 'settings';
 type Modal = 'account' | 'product' | null;
 type CartLine = { product: Product; quantity: number };
 
@@ -51,6 +51,7 @@ const tabs: { id: Tab; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'quotes', label: 'Teklifler', icon: FileText },
   { id: 'pdfs', label: 'PDF Sablonlari', icon: FileDown },
   { id: 'messages', label: 'Mesaj Sablonlari', icon: MessageCircle },
+  { id: 'users', label: 'Kullanicilar', icon: UserRound },
   { id: 'tests', label: 'Panel Test', icon: RefreshCcw },
   { id: 'settings', label: 'Entegrasyon', icon: CreditCard },
 ];
@@ -147,7 +148,7 @@ export function App() {
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [returnDetailAccountId, setReturnDetailAccountId] = useState('');
   const [manualRate, setManualRate] = useState('');
-  const [notice, setNotice] = useState('Demo sistem hazir');
+  const [notice, setNotice] = useState('Canlı sistem aktif');
   const [apiError, setApiError] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -213,7 +214,7 @@ export function App() {
   async function refresh() {
     try {
       await apiHealthCheck();
-      const [dashboardData, accountData, productData, saleData, collectionData, purchaseData, supplierPaymentData, quoteData, orderData, logData, categoryData, pdfData, messageData, userData] = await Promise.all([
+      const [dashboardData, accountData, productData, saleData, collectionData, purchaseData, supplierPaymentData, quoteData, orderData, logData, categoryData, pdfData, messageData] = await Promise.all([
         apiGet<Dashboard>('/dashboard'),
         apiGet<Account[]>('/accounts'),
         apiGet<Product[]>('/products'),
@@ -227,8 +228,14 @@ export function App() {
         apiGet<Category[]>('/categories'),
         apiGet<PdfTemplate[]>('/pdf-templates'),
         apiGet<MessageTemplate[]>('/message-templates'),
-        apiGet<UserSession[]>('/users'),
       ]);
+      let storedUser: UserSession | null = null;
+      try {
+        storedUser = JSON.parse(localStorage.getItem('erp_user') ?? 'null') as UserSession | null;
+      } catch {
+        storedUser = null;
+      }
+      const userData = storedUser?.role === 'ADMIN' ? await apiGet<UserSession[]>('/users') : [];
       setApiError('');
       setDashboard(dashboardData);
       setAccounts(accountData);
@@ -254,6 +261,7 @@ export function App() {
     localStorage.setItem('erp_token', accessToken);
     localStorage.setItem('erp_user', JSON.stringify(user));
     setCurrentUser(user);
+    void refresh();
   }
 
   function logout() {
@@ -269,6 +277,19 @@ export function App() {
       await refresh();
       setNotice(`Kullanici olusturuldu: ${user.username ?? user.email} / gecici sifre verildi`);
       return user;
+    } catch (error) {
+      setNotice(errorMessage(error));
+      throw error;
+    }
+  }
+
+  async function saveUser(payload: { id?: string; name: string; email: string; username?: string; password?: string; role: UserSession['role']; accountId?: string; phone?: string; active?: boolean }) {
+    try {
+      const body = { ...payload, mustChangePassword: payload.id ? undefined : true };
+      if (payload.id) await apiPut<UserSession>(`/users/${payload.id}`, body);
+      else await apiPost<UserSession>('/users', body);
+      await refresh();
+      setNotice(payload.id ? 'Kullanici guncellendi' : 'Kullanici olusturuldu');
     } catch (error) {
       setNotice(errorMessage(error));
       throw error;
@@ -489,21 +510,29 @@ export function App() {
     if (active === 'quotes') return <QuotesView usdRate={dashboard.usdRate} quotes={quotes} accounts={accounts} products={activeProducts} pdfTemplates={pdfTemplates} onNotice={setNotice} onRefresh={refresh} />;
     if (active === 'pdfs') return <PdfTemplatesView templates={pdfTemplates} onNotice={setNotice} onRefresh={refresh} />;
     if (active === 'messages') return <MessageTemplatesView templates={messageTemplates} onNotice={setNotice} onRefresh={refresh} />;
+    if (active === 'users') return currentUser?.role === 'ADMIN' ? <UsersView users={users} accounts={accounts} onSave={saveUser} onNotice={setNotice} /> : <AccessDenied />;
     if (active === 'tests') return <PanelTestView onNotice={setNotice} onRefresh={refresh} />;
     return <OperationsView usdRate={dashboard.usdRate} accounts={accounts} products={products} purchases={purchases} quotes={quotes} onDebt={sendDebtMessage} onNotice={setNotice} onRefresh={refresh} />;
   }, [active, accounts, collections, dashboard, products, purchases, quotes, sales, supplierPayments, categoriesData, detail, productDetailId, orders, paymentLogs, users, currentUser, apiError]);
 
-  if (window.location.pathname === '/login') {
-    return <LoginPage onLogin={(token, user) => {
+  const loginPath = window.location.pathname;
+  if (!currentUser || ['/login', '/bayi-giris', '/admin-giris'].includes(loginPath)) {
+    const mode = loginPath === '/bayi-giris' ? 'portal' : loginPath === '/admin-giris' ? 'admin' : 'any';
+    if (currentUser && loginPath !== '/login') window.history.replaceState({}, '', currentUser.role === 'CUSTOMER' || currentUser.role === 'DEALER' ? '/bayi-giris' : '/');
+    if (currentUser && loginPath !== '/login') {
+      // Already authenticated, continue to the app shell.
+    } else {
+      return <LoginPage mode={mode} onLogin={(token, user) => {
       storeSession(token, user);
       window.history.pushState({}, '', '/');
       setActive(user.role === 'CUSTOMER' || user.role === 'DEALER' ? 'dealer' : 'dashboard');
       setNotice(`${user.name} olarak giris yapildi`);
-    }} />;
+      }} />;
+    }
   }
 
   const portalOnly = currentUser?.role === 'CUSTOMER' || currentUser?.role === 'DEALER';
-  const visibleTabs = portalOnly ? tabs.filter((tab) => tab.id === 'dealer') : tabs;
+  const visibleTabs = portalOnly ? tabs.filter((tab) => tab.id === 'dealer') : tabs.filter((tab) => tab.id !== 'users' || currentUser?.role === 'ADMIN');
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#eaf7f4_0,#f6f8fb_34%,#eef3f7_100%)] text-ink dark:bg-[radial-gradient(circle_at_top_left,#14313a_0,#0b1118_38%,#111827_100%)] dark:text-slate-100">
@@ -568,7 +597,7 @@ export function App() {
             </div>
             <div className="flex items-center gap-2">
               <IconButton title="Tema" onClick={() => setDark((value) => !value)}>{dark ? <Sun size={18} /> : <Moon size={18} />}</IconButton>
-              {currentUser ? <Button variant="soft" onClick={logout}>{currentUser.name}</Button> : <Button variant="soft" onClick={() => { window.history.pushState({}, '', '/login'); setNotice('Giris ekranina yonlendirildi'); }}>Giris</Button>}
+              {currentUser ? <Button variant="soft" onClick={logout}>{currentUser.name}</Button> : <Button variant="soft" onClick={() => { window.history.pushState({}, '', '/admin-giris'); setNotice('Giris ekranina yonlendirildi'); }}>Giris</Button>}
               {!portalOnly && <button onClick={() => activateTab('sales')} className="inline-flex h-10 items-center gap-2 rounded bg-ocean px-4 text-sm font-semibold text-white transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-[#0e5c70] hover:shadow-lg hover:shadow-ocean/15">
                 <PackagePlus size={18} />
                 Hizli satis
@@ -1878,7 +1907,7 @@ function PdfLivePreview({ template, onChange }: { template: PdfTemplate; onChang
         {block('title', <div><div style={{ color: settings.headerColor, fontSize: settings.titleSize, fontWeight: 900 }}>{settings.companyName}</div><div className="font-bold">{template.title}</div><div>{settings.subtitle}</div><div className="text-slate-500">{settings.contactInfo}</div></div>, 'min-w-[220px]')}
         {settings.showQr && block('qr', <div className="grid h-20 w-20 place-items-center rounded-lg text-white" style={{ background: settings.headerColor }}>QR</div>)}
         <div className="absolute left-[5%] right-[5%] top-[22%] rounded-lg border p-3" style={{ borderColor: settings.tableBorderColor }}>
-          <b>Musteri:</b> Demo Musteri<br /><b>Tarih:</b> {new Date().toLocaleDateString('tr-TR')}<br /><b>Belge No:</b> DEMO-001
+          <b>Musteri:</b> Musteri Unvani<br /><b>Tarih:</b> {new Date().toLocaleDateString('tr-TR')}<br /><b>Belge No:</b> ORN-001
         </div>
         <table className="absolute left-[5%] right-[5%] top-[34%] w-[90%] border-collapse text-left" style={{ fontSize: settings.bodySize }}>
           <thead><tr>{columns.map((column) => <th key={column} className="border p-2" style={{ background: settings.tableHeaderColor, borderColor: settings.tableBorderColor, color: settings.headerColor }}>{column}</th>)}</tr></thead>
@@ -2377,7 +2406,7 @@ function CollectionsView({ usdRate, selectedAccountId, accounts, collections, pa
 
 function DealerView({ usdRate, products, accounts, orders, initialSession, onNotice, onRefresh }: { usdRate: number; products: Product[]; accounts: Account[]; orders: Order[]; initialSession?: UserSession | null; onNotice: (message: string) => void; onRefresh: () => Promise<void> }) {
   const [session, setSession] = useState<UserSession | null>(initialSession ?? null);
-  const [loginForm, setLoginForm] = useState({ email: 'bayi@demo.local', password: 'bayi123' });
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [passwordForm, setPasswordForm] = useState({ open: false, token: '', password: '' });
   const dealer = session?.accountId ? accounts.find((item) => item.id === session.accountId) : undefined;
   const [cart, setCart] = useState<CartLine[]>([]);
@@ -2992,56 +3021,115 @@ function PurchaseRecordsTable({ purchases, products, accounts, onSelect }: { pur
 
 type TestRow = { name: string; status: 'Basarili' | 'Hatali' | 'Uyari'; message: string };
 
+function AccessDenied() {
+  return <Panel title="Yetkisiz erisim"><p className="text-sm font-semibold text-rose">Bu ekrana erisim yetkiniz yok.</p></Panel>;
+}
+
+function UsersView({ users, accounts, onSave, onNotice }: { users: UserSession[]; accounts: Account[]; onSave: (payload: { id?: string; name: string; email: string; username?: string; password?: string; role: UserSession['role']; accountId?: string; phone?: string; active?: boolean }) => Promise<void>; onNotice: (message: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<UserSession | null>(null);
+  const accountName = (id?: string) => accounts.find((account) => account.id === id)?.companyName ?? '-';
+  return (
+    <section className="space-y-5">
+      <Panel title="Kullanicilar" actions={<Button onClick={() => { setEditing(null); setOpen(true); }} icon={<UserRound size={17} />}>Yeni kullanici</Button>}>
+        <p className="text-sm text-slate-500">Admin tum kullanicilari gorur, yeni admin/personel/bayi/musteri hesabi olusturur ve aktif/pasif durumunu yonetir.</p>
+      </Panel>
+      <DataTable
+        title="Kullanici listesi"
+        headers={['Ad soyad', 'Firma/Cari', 'Telefon', 'E-posta', 'Kullanici adi', 'Rol', 'Durum', 'Islem']}
+        rows={users.map((user) => [
+          user.name,
+          accountName(user.accountId),
+          user.phone ?? '-',
+          user.email,
+          user.username ?? '-',
+          <Badge key={`${user.id}-role`}>{user.role}</Badge>,
+          user.active === false ? 'Pasif' : 'Aktif',
+          <Toolbar key={`${user.id}-actions`}>
+            <Button variant="soft" onClick={() => { setEditing(user); setOpen(true); }}>Duzenle</Button>
+            <Button variant="soft" onClick={async () => {
+              try {
+                await onSave({ id: user.id, name: user.name, email: user.email, username: user.username, role: user.role, accountId: user.accountId, phone: user.phone, active: user.active === false });
+              } catch (error) {
+                onNotice(errorMessage(error));
+              }
+            }}>{user.active === false ? 'Aktife al' : 'Pasife al'}</Button>
+          </Toolbar>,
+        ])}
+      />
+      {open && <UserEditModal user={editing} accounts={accounts} onClose={() => setOpen(false)} onSave={async (payload) => { await onSave(payload); setOpen(false); }} />}
+    </section>
+  );
+}
+
+function UserEditModal({ user, accounts, onClose, onSave }: { user: UserSession | null; accounts: Account[]; onClose: () => void; onSave: (payload: { id?: string; name: string; email: string; username?: string; password?: string; role: UserSession['role']; accountId?: string; phone?: string; active?: boolean }) => Promise<void> }) {
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    name: user?.name ?? '',
+    accountId: user?.accountId ?? '',
+    phone: user?.phone ?? '',
+    email: user?.email ?? '',
+    username: user?.username ?? '',
+    password: '',
+    role: user?.role ?? 'DEALER',
+    active: user?.active !== false,
+  });
+  const roleOptions: { label: string; value: UserSession['role'] }[] = [
+    { label: 'ADMIN', value: 'ADMIN' },
+    { label: 'PERSONEL', value: 'PERSONEL' },
+    { label: 'BAYI', value: 'DEALER' },
+    { label: 'MUSTERI', value: 'CUSTOMER' },
+  ];
+  async function save() {
+    if (!form.name.trim() || !form.email.trim()) return;
+    if (!user && form.password.length < 6) return;
+    setSaving(true);
+    try {
+      const portalRole = form.role === 'CUSTOMER' || form.role === 'DEALER';
+      await onSave({
+        id: user?.id,
+        name: form.name,
+        email: form.email,
+        username: form.username || undefined,
+        password: form.password || undefined,
+        role: form.role as UserSession['role'],
+        accountId: portalRole ? form.accountId : form.accountId || undefined,
+        phone: form.phone || undefined,
+        active: form.active,
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <ModalFrame title={user ? 'Kullanici duzenle' : 'Yeni kullanici'} onClose={onClose}>
+      <div className="grid gap-3 md:grid-cols-2">
+        <FormInput label="Ad soyad" value={form.name} onChange={(name) => setForm({ ...form, name })} />
+        <FormSelect label="Firma / cari" value={form.accountId} onChange={(accountId) => setForm({ ...form, accountId })} options={[{ label: 'Cari baglantisi yok', value: '' }, ...accounts.map((account) => ({ label: account.companyName, value: account.id }))]} />
+        <FormInput label="Telefon" value={form.phone} onChange={(phone) => setForm({ ...form, phone })} />
+        <FormInput label="E-posta" value={form.email} onChange={(email) => setForm({ ...form, email })} />
+        <FormInput label="Kullanici adi" value={form.username} onChange={(username) => setForm({ ...form, username })} />
+        <FormInput label={user ? 'Yeni sifre (bos birakilabilir)' : 'Gecici sifre'} type="password" value={form.password} onChange={(password) => setForm({ ...form, password })} />
+        <FormSelect label="Rol" value={form.role} onChange={(role) => setForm({ ...form, role: role as UserSession['role'] })} options={roleOptions} />
+        <label className="mt-6 flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} /> Aktif</label>
+      </div>
+      <div className="mt-5 flex justify-end gap-2 border-t border-line pt-4 dark:border-slate-700">
+        <Button variant="soft" onClick={onClose}>Vazgec</Button>
+        <Button disabled={saving || !form.name || !form.email || (!user && form.password.length < 6) || ((form.role === 'CUSTOMER' || form.role === 'DEALER') && !form.accountId)} onClick={save}>{saving ? 'Kaydediliyor...' : 'Kaydet'}</Button>
+      </div>
+    </ModalFrame>
+  );
+}
+
 function PanelTestView({ onNotice, onRefresh }: { onNotice: (message: string) => void; onRefresh: () => Promise<void> }) {
   const [rows, setRows] = useState<TestRow[]>([]);
   async function runTests() {
-    const result: TestRow[] = [];
-    const record = (name: string, status: TestRow['status'], message: string) => {
-      result.push({ name, status, message });
-      setRows([...result]);
-    };
-    try {
-      const stamp = Date.now();
-      const account = await apiPost<Account>('/accounts', { code: `TST-M-${stamp}`, type: 'MUSTERI', companyName: 'TEST MUSTERI', contactName: 'Test', phone: '05550000000', whatsapp: '05550000000', balanceTry: 0, balanceUsd: 0, riskLimit: 50000, dueDay: 30 });
-      record('Test cari olustur', 'Basarili', account.companyName);
-      const supplier = await apiPost<Account>('/accounts', { code: `TST-T-${stamp}`, type: 'TEDARIKCI', companyName: 'TEST TEDARIKCI', contactName: 'Tedarikci', phone: '05551111111', whatsapp: '05551111111', balanceTry: 0, balanceUsd: 0, riskLimit: 50000, dueDay: 30 });
-      record('Test tedarikci olustur', 'Basarili', supplier.companyName);
-      const product = await apiPost<Product>('/products', { name: 'TEST KAMERA', code: '', barcode: `868${stamp}`.slice(0, 13), category: 'Genel', warehouse: 'Merkez Depo', stock: 10, criticalStock: 2, purchaseUsd: 0.5, purchaseTry: 22.64, saleUsd: 1.25, saleTry: 56.59, dealerUsd: 1, dealerTry: 45.27 });
-      record('Test urun olustur', 'Basarili', `${product.code} - ${money(product.saleUsd, 'USD')}`);
-      const sale = await apiPost<Sale>('/sales', { accountId: account.id, currency: 'USD', paid: 0, discount: 0, items: [{ productId: product.id, quantity: 2 }] });
-      record('Test satis yap', 'Basarili', sale.id);
-      await apiPost<Collection>('/collections', { accountId: account.id, method: 'Nakit', currency: 'USD', amount: 1, description: 'Panel test tahsilat' });
-      record('Test tahsilat yap', 'Basarili', 'Cari bakiye dusuruldu');
-      await apiPost<Purchase>('/purchases', { supplierId: supplier.id, currency: 'USD', invoiceNo: `TST-${stamp}`, paymentStatus: 'Bekliyor', items: [{ productId: product.id, quantity: 3, unitPriceUsd: 0.5, unitPriceTry: 22.64 }] });
-      record('Test alis yap', 'Basarili', 'Stok artisi yapildi');
-      await apiPost<Quote>('/quotes', { accountId: account.id, currency: 'USD', validUntil: new Date(Date.now() + 86400000).toISOString(), items: [{ productId: product.id, quantity: 1, unitPriceUsd: 1.25, unitPriceTry: 56.59, discountRate: 0, vatRate: 20 }] });
-      record('Test teklif olustur', 'Basarili', 'Teklif kaydedildi');
-      const login = await apiPost<{ accessToken: string; user: UserSession }>('/auth/login', { email: 'bayi@demo.local', password: 'bayi123' });
-      record('Musteri paneli giris testi', login.user.role === 'DEALER' ? 'Basarili' : 'Uyari', login.user.email);
-      const dealerAccountId = login.user.accountId ?? account.id;
-      const order = await apiPost<Order>('/orders', { accountId: dealerAccountId, currency: 'TRY', items: [{ productId: product.id, quantity: 1 }] });
-      record('Siparis olusturma testi', 'Basarili', order.id);
-      const approved = await apiPost<{ sale: Sale }>(`/orders/${order.id}/approve`);
-      record('Siparis onay/satisa donusum testi', 'Basarili', approved.sale.id);
-      const payment = await apiPost<{ status: string; paymentLog?: PaymentLog; receiptId?: string }>('/payments/dealer', { accountId: dealerAccountId, currency: 'TRY', amount: 10, method: 'Havale/EFT' });
-      record('Odeme bildirimi testi', payment.status === 'beklemede' ? 'Basarili' : 'Uyari', payment.paymentLog?.id ?? payment.receiptId ?? payment.status);
-      if (payment.paymentLog?.id) {
-        await apiPost(`/payments/dealer/${payment.paymentLog.id}/approve`);
-        record('Odeme onayi/tahsilat testi', 'Basarili', 'Tahsilat olusturuldu');
-      }
-      const afterProducts = await apiGet<Product[]>('/products');
-      const afterAccounts = await apiGet<Account[]>('/accounts');
-      const afterProduct = afterProducts.find((item) => item.id === product.id);
-      record('Stok dusus/artis kontrolu', afterProduct && afterProduct.stock === 10 ? 'Basarili' : 'Uyari', `Beklenen 10, bulunan ${afterProduct?.stock ?? '-'}`);
-      record('Yenileme sonrasi veri kontrolu', afterAccounts.some((item) => item.id === account.id) && afterProducts.some((item) => item.id === product.id) ? 'Basarili' : 'Hatali', 'API yeniden okumasinda kayitlar duruyor');
-      await onRefresh();
-      onNotice('Panel testi tamamlandi');
-    } catch (error) {
-      record('Panel testi', 'Hatali', errorMessage(error));
-      onNotice(errorMessage(error));
-    }
+    const warning = 'Canlı sistemde test kaydı oluşturma pasif.';
+    setRows([{ name: 'Panel testi', status: 'Uyari', message: warning }]);
+    onNotice(warning);
+    await onRefresh();
   }
-  return <section className="space-y-5"><Panel title="Sistem Testi" actions={<Button onClick={runTests} icon={<RefreshCcw size={17} />}>Testleri calistir</Button>}><p className="text-sm text-slate-500">Gercek API kayitlariyla cari, urun, tedarikci, satis, tahsilat, alis, teklif, stok ve kalicilik kontrolleri calisir.</p></Panel><DataTable title="Test sonuclari" headers={['Test', 'Durum', 'Mesaj']} rows={rows.map((row) => [row.name, <Badge key={row.name}>{row.status}</Badge>, row.message])} /></section>;
+  return <section className="space-y-5"><Panel title="Sistem Testi" actions={<Button variant="soft" onClick={runTests} icon={<RefreshCcw size={17} />}>Canli modda pasif</Button>}><p className="text-sm text-slate-500">Canli sistemde otomatik test kaydi olusturma kapatildi. Test islemleri yalnizca ayrilmis test ortaminda calistirilmalidir.</p></Panel><DataTable title="Test sonuclari" headers={['Test', 'Durum', 'Mesaj']} rows={rows.map((row) => [row.name, <Badge key={row.name}>{row.status}</Badge>, row.message])} /></section>;
 }
 
 function OperationsView({ usdRate, accounts, products, purchases, quotes, onDebt, onNotice, onRefresh }: { usdRate: number; accounts: Account[]; products: Product[]; purchases: Purchase[]; quotes: Quote[]; onDebt: (id: string) => void; onNotice: (message: string) => void; onRefresh: () => Promise<void> }) {
@@ -3102,11 +3190,11 @@ function OperationsView({ usdRate, accounts, products, purchases, quotes, onDebt
         <div className="mt-3 text-sm text-slate-500">Canli kur: 1 USD = {money(usdRate)}</div>
       </Panel>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Panel title="Alis akisi"><Button onClick={createPurchase} icon={<PackagePlus size={17} />}>Demo alis olustur</Button></Panel>
+        <Panel title="Alis akisi"><Button onClick={createPurchase} icon={<PackagePlus size={17} />}>Alis olustur</Button></Panel>
         <Panel title="Teklif akisi"><Button onClick={createQuote} icon={<FileText size={17} />}>PDF teklif onizle</Button></Panel>
         <Panel title="WhatsApp"><Button variant="soft" onClick={() => customer && onDebt(customer.id)} icon={<MessageCircle size={17} />}>Borc mesaji</Button></Panel>
         <Panel title="Veri yedekleme"><div className="space-y-3"><Button onClick={backupData} icon={<FileDown size={17} />}>Verileri yedekle</Button><label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded border border-line px-3 text-sm font-semibold text-ocean dark:border-slate-700"><Upload size={16} /> JSON ice aktar<input type="file" accept=".json" className="hidden" onChange={(event) => void importBackup(event.target.files?.[0])} /></label></div></Panel>
-        <Panel title="Test kullanicilari"><div className="space-y-2 text-sm"><div>admin@demo.local</div><div>muhasebe@demo.local</div><div>satis@demo.local</div><div>depo@demo.local</div></div></Panel>
+        <Panel title="Kullanici guvenligi"><div className="text-sm text-slate-500">Canli sistemde varsayilan test kullanicisi gosterilmez.</div></Panel>
       </div>
       <DataTable title="Alis kayitlari" headers={['Fis', 'Tedarikci', 'Tutar', 'Para', 'Tarih']} rows={purchases.map((item) => [item.id, item.supplierName ?? item.supplierId, money(item.total, item.currency === 'USD' ? 'USD' : 'TL'), item.currency, new Date(item.createdAt).toLocaleDateString('tr-TR')])} />
       <DataTable title="Teklifler" headers={['No', 'Cari', 'Tutar', 'Durum', 'Gecerlilik']} rows={quotes.map((item) => [item.id, item.accountName ?? item.accountId, money(item.total, item.currency === 'USD' ? 'USD' : 'TL'), item.status, new Date(item.validUntil).toLocaleDateString('tr-TR')])} />
@@ -4118,15 +4206,18 @@ function Summary({ label, value, strong }: { label: string; value: string; stron
   return <div className={`flex items-center justify-between ${strong ? 'text-lg font-bold' : 'text-sm'}`}><span className="text-slate-500 dark:text-slate-400">{label}</span><span>{value}</span></div>;
 }
 
-function LoginPage({ onLogin }: { onLogin: (token: string, user: UserSession) => void }) {
-  const [form, setForm] = useState({ email: 'bayi@demo.local', password: 'bayi123' });
+function LoginPage({ mode = 'any', onLogin }: { mode?: 'any' | 'admin' | 'portal'; onLogin: (token: string, user: UserSession) => void }) {
+  const [form, setForm] = useState({ email: '', password: '' });
   const [newPassword, setNewPassword] = useState('');
   const [session, setSession] = useState<{ accessToken: string; user: UserSession } | null>(null);
-  const [message, setMessage] = useState('Musteri veya bayi hesabinizla giris yapin.');
+  const [message, setMessage] = useState(mode === 'portal' ? 'Musteri veya bayi hesabinizla giris yapin.' : 'Admin veya personel hesabinizla giris yapin.');
 
   async function login() {
     try {
       const result = await apiPost<{ accessToken: string; user: UserSession }>('/auth/login', form);
+      const portalRole = result.user.role === 'CUSTOMER' || result.user.role === 'DEALER';
+      if (mode === 'portal' && !portalRole) throw new Error('Bu sayfaya sadece musteri veya bayi kullanicisi girebilir.');
+      if (mode === 'admin' && portalRole) throw new Error('Bu sayfaya sadece admin veya personel kullanicisi girebilir.');
       if (result.user.mustChangePassword) {
         setSession(result);
         setMessage('Ilk giris: lutfen yeni sifrenizi belirleyin.');
@@ -4148,6 +4239,9 @@ function LoginPage({ onLogin }: { onLogin: (token: string, user: UserSession) =>
       });
       if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
       const fresh = await apiPost<{ accessToken: string; user: UserSession }>('/auth/login', { email: form.email, password: newPassword });
+      const portalRole = fresh.user.role === 'CUSTOMER' || fresh.user.role === 'DEALER';
+      if (mode === 'portal' && !portalRole) throw new Error('Bu sayfaya sadece musteri veya bayi kullanicisi girebilir.');
+      if (mode === 'admin' && portalRole) throw new Error('Bu sayfaya sadece admin veya personel kullanicisi girebilir.');
       onLogin(fresh.accessToken, { ...fresh.user, mustChangePassword: false });
     } catch (error) {
       setMessage(errorMessage(error));
@@ -4186,9 +4280,6 @@ function LoginPage({ onLogin }: { onLogin: (token: string, user: UserSession) =>
               <FormInput label="Sifre" type="password" value={form.password} onChange={(password) => setForm({ ...form, password })} />
               <Button onClick={login} icon={<UserRound size={17} />}>Giris yap</Button>
               <button type="button" onClick={forgotPassword} className="text-sm font-bold text-ocean hover:underline">Sifremi unuttum</button>
-              <div className="rounded-2xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">
-                Demo bayi: bayi@demo.local / bayi123
-              </div>
             </div>
           ) : (
             <div className="mt-6 space-y-4">

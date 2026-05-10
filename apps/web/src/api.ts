@@ -34,7 +34,7 @@ export interface UserSession {
   email: string;
   username?: string;
   phone?: string;
-  role: 'ADMIN' | 'ACCOUNTING' | 'SALES' | 'WAREHOUSE' | 'CUSTOMER' | 'DEALER' | 'VIEWER';
+  role: 'ADMIN' | 'PERSONEL' | 'ACCOUNTING' | 'SALES' | 'WAREHOUSE' | 'CUSTOMER' | 'DEALER' | 'VIEWER';
   accountId?: string;
   active?: boolean;
   mustChangePassword?: boolean;
@@ -344,6 +344,11 @@ console.log('API_BASE_URL:', API_BASE_URL);
 
 const jsonHeaders = { 'Content-Type': 'application/json' };
 
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem('erp_token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export function apiUrl(path: string) {
   const normalizedBase = API_BASE_URL.replace(/\/$/, '');
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
@@ -351,7 +356,7 @@ export function apiUrl(path: string) {
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(apiUrl(path));
+  const response = await fetch(apiUrl(path), { headers: authHeaders() });
   if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
   return response.json() as Promise<T>;
 }
@@ -359,7 +364,7 @@ export async function apiGet<T>(path: string): Promise<T> {
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(apiUrl(path), {
     method: 'POST',
-    headers: jsonHeaders,
+    headers: { ...jsonHeaders, ...authHeaders() },
     body: JSON.stringify(body ?? {}),
   });
   if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
@@ -369,7 +374,7 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(apiUrl(path), {
     method: 'PUT',
-    headers: jsonHeaders,
+    headers: { ...jsonHeaders, ...authHeaders() },
     body: JSON.stringify(body ?? {}),
   });
   if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
@@ -377,7 +382,7 @@ export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
-  const response = await fetch(apiUrl(path), { method: 'DELETE' });
+  const response = await fetch(apiUrl(path), { method: 'DELETE', headers: authHeaders() });
   if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
   return response.json() as Promise<T>;
 }

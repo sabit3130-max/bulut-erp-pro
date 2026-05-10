@@ -5,46 +5,30 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Account, Category, Collection, Currency, MessageTemplate, Order, PaymentLog, PdfTemplate, Product, Purchase, Quote, Sale, SupplierPayment, TransactionItem, User } from './types';
 
-const names = ['Akdeniz', 'Ege', 'Marmara', 'Anadolu', 'Kuzey', 'Delta', 'Atlas', 'Nova', 'Poyraz', 'Liman'];
-const categories = ['Filtre', 'Pompa', 'Yedek Parca', 'Sarf', 'Genel'];
-const warehouses = ['Merkez Depo', 'Bayi Depo', 'E-Ticaret Depo'];
-
 @Injectable()
 export class DataService {
   private readonly storePath = join(__dirname, '..', '..', '..', 'data', 'erp-store.json');
   private usdRate = 45.2714;
   private usdRateUpdatedAt = new Date().toISOString();
 
-  private users: User[] = [
-    { id: 'u1', name: 'Admin Kullanici', email: 'admin@demo.local', passwordHash: hashSync('admin123', 10), role: 'ADMIN' },
-    { id: 'u2', name: 'Muhasebe Kullanici', email: 'muhasebe@demo.local', passwordHash: hashSync('muhasebe123', 10), role: 'ACCOUNTING' },
-    { id: 'u3', name: 'Satis Personeli', email: 'satis@demo.local', passwordHash: hashSync('satis123', 10), role: 'SALES' },
-    { id: 'u4', name: 'Depo Personeli', email: 'depo@demo.local', passwordHash: hashSync('depo123', 10), role: 'WAREHOUSE' },
-    { id: 'u5', name: 'Bayi Kullanici', email: 'bayi@demo.local', username: 'bayi', passwordHash: hashSync('bayi123', 10), role: 'DEALER', accountId: 'a2', active: true, mustChangePassword: false, createdAt: new Date().toISOString() },
-  ];
-
-  private accounts: Account[] = this.makeAccounts();
-  private products: Product[] = this.makeProducts();
-  private categories: Category[] = this.makeCategories();
+  private users: User[] = [];
+  private accounts: Account[] = [];
+  private products: Product[] = [];
+  private categories: Category[] = [];
   private sales: Sale[] = [];
   private collections: Collection[] = [];
   private paymentLogs: PaymentLog[] = [];
   private purchases: Purchase[] = [];
   private supplierPayments: SupplierPayment[] = [];
   private quotes: Quote[] = [];
-  private pdfTemplates: PdfTemplate[] = this.makePdfTemplates();
-  private messageTemplates: MessageTemplate[] = this.makeMessageTemplates();
-  private orders: Order[] = [
-    { id: 'o1', accountId: 'a2', status: 'Beklemede', totalTry: 11250, totalUsd: 350, createdAt: new Date().toISOString() },
-  ];
+  private pdfTemplates: PdfTemplate[] = [];
+  private messageTemplates: MessageTemplate[] = [];
+  private orders: Order[] = [];
 
   constructor(private readonly jwt: JwtService) {
-    const restored = this.loadFromDisk();
-    if (!restored) {
-      this.seedTransactions();
-      this.persist();
-    }
-    void this.updateExchangeRate().catch(() => undefined);
+    this.loadFromDisk();
+    this.bootstrapAdminFromEnv();
+    this.setupAutoBackup();
   }
 
   login(identifier: string, password: string) {
@@ -107,11 +91,13 @@ export class DataService {
     };
   }
 
-  listUsers() {
+  listUsers(authorization?: string) {
+    this.requireAdmin(authorization);
     return this.users.map(({ passwordHash: _passwordHash, ...user }) => user);
   }
 
-  createUser(input: { name: string; email: string; username?: string; password: string; role: 'CUSTOMER' | 'DEALER' | 'ADMIN' | 'ACCOUNTING' | 'SALES' | 'WAREHOUSE' | 'VIEWER'; accountId?: string; phone?: string; mustChangePassword?: boolean; active?: boolean }) {
+  createUser(authorization: string | undefined, input: { name: string; email: string; username?: string; password: string; role: 'CUSTOMER' | 'DEALER' | 'ADMIN' | 'PERSONEL' | 'ACCOUNTING' | 'SALES' | 'WAREHOUSE' | 'VIEWER'; accountId?: string; phone?: string; mustChangePassword?: boolean; active?: boolean }) {
+    this.requireAdmin(authorization);
     const name = String(input.name ?? '').trim();
     const email = String(input.email ?? '').trim().toLocaleLowerCase('tr-TR');
     const username = String(input.username ?? email).trim().toLocaleLowerCase('tr-TR');
@@ -140,7 +126,8 @@ export class DataService {
     return safeUser;
   }
 
-  updateUser(id: string, input: Partial<User> & { password?: string }) {
+  updateUser(authorization: string | undefined, id: string, input: Partial<User> & { password?: string }) {
+    this.requireAdmin(authorization);
     const user = this.users.find((item) => item.id === id);
     if (!user) throw new NotFoundException('Kullanici bulunamadi');
     if (input.email && this.users.some((item) => item.id !== id && item.email.toLocaleLowerCase('tr-TR') === input.email!.toLocaleLowerCase('tr-TR'))) throw new BadRequestException('E-posta zaten kullanimda');
@@ -180,7 +167,8 @@ export class DataService {
     return { usdTry: this.usdRate, updatedAt: this.usdRateUpdatedAt };
   }
 
-  exportStore() {
+  exportStore(authorization?: string) {
+    this.requireAdmin(authorization);
     return {
       exportedAt: new Date().toISOString(),
       usdRate: this.usdRate,
@@ -201,7 +189,8 @@ export class DataService {
     };
   }
 
-  importStore(input: ReturnType<DataService['exportStore']>) {
+  importStore(authorization: string | undefined, input: ReturnType<DataService['exportStore']>) {
+    this.requireAdmin(authorization);
     if (!input || !Array.isArray(input.accounts) || !Array.isArray(input.products)) throw new BadRequestException('Yedek dosyasi hatali');
     this.usdRate = this.number(input.usdRate, this.usdRate);
     this.usdRateUpdatedAt = input.usdRateUpdatedAt || new Date().toISOString();
@@ -934,7 +923,7 @@ export class DataService {
     const built = this.buildQuotePayload(input);
     const id = this.nextId('q', this.quotes);
     const quoteNo = `TKF-2026-${String(this.quotes.length + 1).padStart(3, '0')}`;
-    const quote: Quote = { id, quoteNo, accountId: built.account.id, items: built.items, currency: input.currency, exchangeRate: this.usdRate, subtotal: built.subtotal, vat: built.vat, discount: built.discount, total: built.total, subtotalTry: built.subtotalTry, subtotalUsd: built.subtotalUsd, discountTry: built.discountTry, discountUsd: built.discountUsd, vatTry: built.vatTry, vatUsd: built.vatUsd, totalTry: built.totalTry, totalUsd: built.totalUsd, validUntil: input.validUntil, status: 'Taslak', note: input.note ?? 'Demo teklif notu', internalNote: input.internalNote ?? 'Ic not', deliveryTime: input.deliveryTime ?? '3 is gunu', paymentTerm: input.paymentTerm ?? 'Pesin / kredi karti', warranty: input.warranty ?? '24 ay', assemblyIncluded: Boolean(input.assemblyIncluded), salesRep: input.salesRep ?? 'Satis Personeli', createdBy: 'Admin Kullanici', revision: 0, timeline: [{ date: new Date().toISOString(), action: 'Teklif olusturuldu', user: 'Admin Kullanici' }], messageHistory: [], pdfHistory: [], revisions: [], createdAt: new Date().toISOString() };
+    const quote: Quote = { id, quoteNo, accountId: built.account.id, items: built.items, currency: input.currency, exchangeRate: this.usdRate, subtotal: built.subtotal, vat: built.vat, discount: built.discount, total: built.total, subtotalTry: built.subtotalTry, subtotalUsd: built.subtotalUsd, discountTry: built.discountTry, discountUsd: built.discountUsd, vatTry: built.vatTry, vatUsd: built.vatUsd, totalTry: built.totalTry, totalUsd: built.totalUsd, validUntil: input.validUntil, status: 'Taslak', note: input.note ?? '', internalNote: input.internalNote ?? '', deliveryTime: input.deliveryTime ?? '', paymentTerm: input.paymentTerm ?? '', warranty: input.warranty ?? '', assemblyIncluded: Boolean(input.assemblyIncluded), salesRep: input.salesRep ?? '', createdBy: 'Admin Kullanici', revision: 0, timeline: [{ date: new Date().toISOString(), action: 'Teklif olusturuldu', user: 'Admin Kullanici' }], messageHistory: [], pdfHistory: [], revisions: [], createdAt: new Date().toISOString() };
     this.quotes.unshift(quote);
     this.persist();
     return quote;
@@ -1187,7 +1176,7 @@ export class DataService {
     if (amount <= 0) throw new BadRequestException('Tahsil edilecek bakiye yok');
     const needs3d = !account.cardToken;
     const success = forceResult ? forceResult === 'success' : Boolean(account.cardToken) && account.cardToken?.includes('success');
-    const paymentLink = `https://pos.tosla.example/3d/demo-${account.id}-${Date.now()}`;
+    const paymentLink = `https://pos.tosla.example/3d/pay-${account.id}-${Date.now()}`;
     if (success && !needs3d) {
       const collection = this.createCollection({ accountId: account.id, method: 'Kredi karti', currency, amount });
       account.lastCollectionDate = collection.createdAt;
@@ -1223,7 +1212,7 @@ export class DataService {
     if (!collection) throw new NotFoundException('Tahsilat bulunamadi');
     const account = this.findAccount(collection.accountId);
     return {
-      company: 'Demo Firma',
+      company: 'Firma',
       receiptNo: collection.receiptNo || `MKB-${collection.id.toUpperCase()}`,
       account: account.companyName,
       accountCode: account.code,
@@ -1252,8 +1241,8 @@ export class DataService {
     const amountTry = collection.currency === 'TRY' ? collection.amount : 0;
     const amountUsd = collection.currency === 'USD' ? collection.amount : 0;
     const message = collection.status === 'basarisiz' || collection.status === 'beklemede'
-      ? `Merhaba ${account.contactName},\n${date} tarihinde otomatik tahsilat islemi basarisiz olmustur.\n\nOdenmesi gereken tutar:\n${amountTry} TL\n${amountUsd} USD\n\nOdeme yapmak icin:\n${collection.paymentLink}\n\nDemo Firma`
-      : `Merhaba ${account.contactName},\n${date} tarihinde ${amountTry} TL / ${amountUsd} USD odemeniz basariyla alinmistir.\n\nKalan bakiyeniz:\n${account.balanceTry} TL\n${account.balanceUsd} USD\n\nTesekkur ederiz.\nDemo Firma`;
+      ? `Merhaba ${account.contactName},\n${date} tarihinde otomatik tahsilat islemi basarisiz olmustur.\n\nOdenmesi gereken tutar:\n${amountTry} TL\n${amountUsd} USD\n\nOdeme yapmak icin:\n${collection.paymentLink}\n\nFirma`
+      : `Merhaba ${account.contactName},\n${date} tarihinde ${amountTry} TL / ${amountUsd} USD odemeniz basariyla alinmistir.\n\nKalan bakiyeniz:\n${account.balanceTry} TL\n${account.balanceUsd} USD\n\nTesekkur ederiz.\nFirma`;
     return { to: account.whatsapp, message, link: this.whatsappLink(account.whatsapp, message) };
   }
 
@@ -1265,13 +1254,13 @@ export class DataService {
     const totalUsd = sale.currency === 'USD' ? sale.total : Math.round((sale.total / this.usdRate) * 100) / 100;
     const remainingTry = sale.currency === 'TRY' ? sale.remaining : Math.round(sale.remaining * this.usdRate * 100) / 100;
     const remainingUsd = sale.currency === 'USD' ? sale.remaining : Math.round((sale.remaining / this.usdRate) * 100) / 100;
-    const message = `Merhaba ${account.contactName}, satis bilgi notunuz:\nToplam:\n${totalTry} TL\n${totalUsd} USD\nKalan:\n${remainingTry} TL\n${remainingUsd} USD\nGuncel kur: ${this.usdRate}\nDemo Firma`;
+    const message = `Merhaba ${account.contactName}, satis bilgi notunuz:\nToplam:\n${totalTry} TL\n${totalUsd} USD\nKalan:\n${remainingTry} TL\n${remainingUsd} USD\nGuncel kur: ${this.usdRate}\nFirma`;
     return { to: account.whatsapp, message, link: this.whatsappLink(account.whatsapp, message) };
   }
 
   whatsappDebtReminder(accountId: string) {
     const account = this.findAccount(accountId);
-    const message = `Merhaba ${account.contactName}, cari hesabinizda ${account.balanceTry} TL / ${account.balanceUsd} USD odenmemis bakiye bulunmaktadir. Demo Firma`;
+    const message = `Merhaba ${account.contactName}, cari hesabinizda ${account.balanceTry} TL / ${account.balanceUsd} USD odenmemis bakiye bulunmaktadir. Firma`;
     return { to: account.whatsapp, message, link: this.whatsappLink(account.whatsapp, message) };
   }
 
@@ -1295,12 +1284,12 @@ export class DataService {
       fileName: `${quote.quoteNo ?? quote.id.toUpperCase()}_${this.findAccount(quote.accountId).companyName.replace(/\s+/g, '_')}.pdf`,
       title: 'PDF Teklif Onizleme',
       account: this.findAccount(quote.accountId).companyName,
-      logo: 'Demo Firma Logosu',
+      logo: 'Firma Logosu',
       stamp: 'Kase alani',
       signature: 'Imza alani',
       bankInfo: 'TR00 0000 0000 0000 0000 0000 00',
       whatsapp: '+90 532 000 00 00',
-      qrCode: `https://erp.demo/quotes/${quote.id}`,
+      qrCode: `/quotes/${quote.id}`,
       validUntil: quote.validUntil,
       lines: quote.items.map((item) => ({ product: this.findProduct(item.productId).name, quantity: item.quantity, unitPrice: item.unitPrice, total: item.lineTotal })),
       totals: {
@@ -1320,156 +1309,9 @@ export class DataService {
       accountId: account.id,
       amount: input.amount,
       currency: input.currency,
-      paymentUrl: `https://pos.tosla.example/pay/demo-${Date.now()}`,
+      paymentUrl: `https://pos.tosla.example/pay/pay-${Date.now()}`,
       callbackUrl: '/api/payments/tosla/webhook',
     };
-  }
-
-  private makeAccounts() {
-    const customerNames = names.slice(0, 8);
-    const customers: Account[] = customerNames.map((name, index) => ({
-      id: `a${index + 1}`,
-      code: `CR-${1001 + index}`,
-      type: index >= 5 ? 'BAYI' : 'MUSTERI',
-      companyName: `${name} Ticaret Ltd.`,
-      contactName: ['Murat Kaya', 'Selin Demir', 'Can Yildiz', 'Elif Arslan', 'Okan Deniz'][index % 5],
-      phone: `+90 212 000 ${String(index).padStart(2, '0')} ${String(index + 10).padStart(2, '0')}`,
-      whatsapp: `+90 532 000 ${String(index).padStart(2, '0')} ${String(index + 10).padStart(2, '0')}`,
-      email: `${name.toLowerCase()}@demo.local`,
-      taxOffice: 'Merkez',
-      taxNumber: `12345678${String(index).padStart(2, '0')}`,
-      address: ['Istanbul', 'Izmir', 'Ankara', 'Bursa', 'Antalya'][index % 5],
-      balanceTry: 2500 * index,
-      balanceUsd: index % 2 === 0 ? 120 * index : 0,
-      riskLimit: 50000 + index * 7500,
-      dueDay: 15 + (index % 4) * 15,
-      note: 'Demo cari kart',
-      autoCollectionEnabled: index < 2,
-      collectionDay: new Date().getDate(),
-      maxCollectionAmount: 1000 + index * 500,
-      paymentCurrency: 'TRY',
-      cardToken: index === 0 ? 'tok_demo_success_001' : index === 1 ? 'tok_demo_fail_001' : '',
-      lastCollectionStatus: 'beklemede',
-    }));
-    const suppliers: Account[] = Array.from({ length: 4 }).map((_, index) => ({
-      id: `a${customers.length + index + 1}`,
-      code: `TD-${2001 + index}`,
-      type: 'TEDARIKCI',
-      companyName: `${['Orion', 'Tekno', 'Global', 'Prizma', 'Kare'][index]} Tedarik A.S.`,
-      contactName: ['Ayse', 'Mehmet', 'Burak', 'Derya', 'Kerem'][index],
-      phone: `+90 216 100 00 0${index}`,
-      whatsapp: `+90 533 100 00 0${index}`,
-      email: `tedarikci${index + 1}@demo.local`,
-      taxOffice: 'Kurumsal',
-      taxNumber: `98765432${String(index).padStart(2, '0')}`,
-      address: ['Kocaeli', 'Konya', 'Kayseri', 'Adana', 'Samsun'][index],
-      balanceTry: -10000 * (index + 1),
-      balanceUsd: index % 2 ? -350 * (index + 1) : 0,
-      riskLimit: 0,
-      dueDay: 30,
-      note: 'Demo tedarikci',
-    }));
-    return [...customers, ...suppliers];
-  }
-
-  private makeProducts() {
-    return Array.from({ length: 20 }).map((_, index) => {
-      const saleUsd = 12 + index * 3;
-      return {
-        id: `p${index + 1}`,
-        name: `${categories[index % categories.length]} Urunu ${index + 1}`,
-        code: `URN-${String(index + 1).padStart(3, '0')}`,
-        barcode: `86900000${String(index + 1).padStart(5, '0')}`,
-        category: categories[index % categories.length],
-        subCategory: index % 2 === 0 ? `${categories[index % categories.length]} Alt` : '',
-        brand: ['Nova', 'Atlas', 'Delta', 'Zen', 'Proline'][index % 5],
-        description: 'Demo stok karti',
-        imageUrl: `https://picsum.photos/seed/erp-product-${index + 1}/160/160`,
-        warehouse: warehouses[index % warehouses.length],
-        stock: 8 + index * 3,
-        criticalStock: 10,
-        vatRate: 20,
-        purchaseTry: Math.round(saleUsd * this.usdRate * 0.58),
-        purchaseUsd: Math.round(saleUsd * 0.58),
-        saleTry: Math.round(saleUsd * this.usdRate),
-        saleUsd,
-        dealerTry: Math.round(saleUsd * this.usdRate * 0.9),
-        dealerUsd: Math.round(saleUsd * 0.9),
-        fixedTryPrice: index % 4 === 0,
-      };
-    });
-  }
-
-  private seedTransactions() {
-    for (let index = 0; index < 3; index += 1) {
-      this.createPurchase({
-        supplierId: `a${9 + index}`,
-        currency: index === 1 ? 'USD' : 'TRY',
-        invoiceNo: `AF-2026-00${index + 1}`,
-        paymentStatus: index === 0 ? 'Kismi' : 'Bekliyor',
-        description: 'Demo alis kaydi',
-        items: [{ productId: `p${1 + index}`, quantity: 4 + index }],
-        date: this.daysAgo(8 - index),
-      });
-    }
-    this.createSupplierPayment({ supplierId: 'a9', method: 'Havale/EFT', currency: 'TRY', amount: 2500, description: 'Demo tedarikci odemesi', date: this.daysAgo(3) });
-    this.createSupplierPayment({ supplierId: 'a10', method: 'Nakit', currency: 'USD', amount: 120, description: 'Demo USD tedarikci odemesi', date: this.daysAgo(2) });
-    for (let index = 0; index < 5; index += 1) {
-      this.createSale({
-        accountId: `a${1 + (index % 8)}`,
-        currency: index % 2 === 0 ? 'TRY' : 'USD',
-        paid: index === 0 ? 100 : index === 2 ? 25 : 0,
-        discount: index % 4 === 0 ? 150 : 0,
-        paymentMethod: index === 0 ? 'Nakit' : 'Vadeli',
-        items: [{ productId: `p${1 + index}`, quantity: 1 + index }],
-        date: this.daysAgo(5 - index),
-      });
-    }
-    for (let index = 0; index < 4; index += 1) {
-      this.createCollection({
-        accountId: `a${1 + (index % 5)}`,
-        method: index % 2 === 0 ? 'Havale/EFT' : 'Nakit',
-        currency: index === 1 ? 'USD' : 'TRY',
-        amount: index === 1 ? 40 : 900 + index * 250,
-        description: 'Demo tahsilat',
-        date: this.daysAgo(4 - index),
-      });
-    }
-    const statuses: Quote['status'][] = ['Taslak', 'Hazirlaniyor', 'Gonderildi', 'Musteri goruntuledi', 'Onaylandi', 'Reddedildi', 'Iptal edildi', 'Suresi gecti', 'Gonderildi', 'Taslak'];
-    for (let index = 0; index < 10; index += 1) {
-      const quote = this.createQuote({
-        accountId: `a${1 + (index % 3)}`,
-        currency: index % 3 === 0 ? 'USD' : 'TRY',
-        discount: index % 2 === 0 ? 100 : 0,
-        validUntil: this.daysAgo(index - 12),
-        deliveryTime: `${2 + index} is gunu`,
-        paymentTerm: index % 2 === 0 ? 'Pesin' : '30 gun vadeli',
-        salesRep: ['Ayse Satis', 'Murat Satis', 'Selin Satis'][index % 3],
-        items: [{ productId: `p${1 + (index % 10)}`, quantity: 1 + (index % 4) }],
-      });
-      quote.status = statuses[index];
-      quote.timeline?.unshift({ date: this.daysAgo(10 - index), action: `Demo durum: ${quote.status}`, user: quote.salesRep ?? 'Admin' });
-      quote.messageHistory?.push({ date: this.daysAgo(9 - index), channel: 'WhatsApp', message: `${quote.quoteNo} gonderildi` });
-      quote.pdfHistory?.push({ date: this.daysAgo(8 - index), fileName: `${quote.quoteNo}.pdf` });
-    }
-  }
-
-  private makeCategories(): Category[] {
-    return categories.map((name, index) => ({
-      id: `cat${index + 1}`,
-      name,
-      parentId: '',
-      icon: ['Filter', 'Gauge', 'Wrench', 'Package', 'Boxes'][index],
-      imageUrl: '',
-      sortOrder: index + 1,
-      active: true,
-      dealerPriceRate: 5 + index,
-      discountRate: index * 2,
-      vatRate: 20,
-      defaultProfitRate: 25 + index * 2,
-      description: `${name} ana kategorisi`,
-      criticalStockLimit: 8 + index,
-    }));
   }
 
   private makePdfTemplates(): PdfTemplate[] {
@@ -1590,23 +1432,92 @@ export class DataService {
       }>;
       this.usdRate = this.number(data.usdRate, this.usdRate);
       this.usdRateUpdatedAt = data.usdRateUpdatedAt || this.usdRateUpdatedAt;
-      this.accounts = data.accounts?.length ? data.accounts : this.accounts;
-      this.products = data.products?.length ? data.products : this.products;
-      this.categories = data.categories?.length ? data.categories : this.categories;
+      this.accounts = data.accounts ?? this.accounts;
+      this.products = data.products ?? this.products;
+      this.categories = data.categories ?? this.categories;
       this.sales = data.sales ?? this.sales;
       this.collections = data.collections ?? this.collections;
       this.paymentLogs = data.paymentLogs ?? this.paymentLogs;
       this.purchases = data.purchases ?? this.purchases;
       this.supplierPayments = data.supplierPayments ?? this.supplierPayments;
       this.quotes = data.quotes ?? this.quotes;
-      this.pdfTemplates = data.pdfTemplates?.length ? data.pdfTemplates : this.pdfTemplates;
-      this.messageTemplates = data.messageTemplates?.length ? data.messageTemplates : this.messageTemplates;
+      this.pdfTemplates = data.pdfTemplates ?? this.pdfTemplates;
+      this.messageTemplates = data.messageTemplates ?? this.messageTemplates;
       this.orders = data.orders ?? this.orders;
-      this.users = data.users?.length ? data.users : this.users;
+      this.users = data.users ?? this.users;
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      console.error('ERP veri deposu okunamadi, canli veri korunuyor.', error);
+      throw new InternalServerErrorException('ERP veri deposu okunamadi');
     }
+  }
+
+  private bootstrapAdminFromEnv() {
+    const email = String(process.env.ADMIN_EMAIL ?? '').trim().toLocaleLowerCase('tr-TR');
+    const password = String(process.env.ADMIN_PASSWORD ?? '');
+    if (!email || !password) return;
+    if (password.length < 8) {
+      console.warn('ADMIN_PASSWORD en az 8 karakter olmali; admin bootstrap atlandi.');
+      return;
+    }
+    const username = String(process.env.ADMIN_USERNAME ?? email).trim().toLocaleLowerCase('tr-TR');
+    const existing = this.users.some((user) => user.email.toLocaleLowerCase('tr-TR') === email || user.username?.toLocaleLowerCase('tr-TR') === username);
+    if (existing) return;
+    this.users.push({
+      id: this.nextId('u', this.users),
+      name: process.env.ADMIN_NAME || 'Sistem Yoneticisi',
+      email,
+      username,
+      phone: process.env.ADMIN_PHONE || '',
+      passwordHash: hashSync(password, 10),
+      role: 'ADMIN',
+      active: true,
+      mustChangePassword: process.env.ADMIN_MUST_CHANGE_PASSWORD !== 'false',
+      createdAt: new Date().toISOString(),
+    });
+    this.persist();
+    console.log(`Admin kullanici olusturuldu: ${email}`);
+  }
+
+  private setupAutoBackup() {
+    if (process.env.AUTO_BACKUP_ENABLED !== 'true') return;
+    const intervalHours = Math.max(1, this.number(process.env.AUTO_BACKUP_INTERVAL_HOURS, 24));
+    this.writeBackupFile('startup');
+    setInterval(() => this.writeBackupFile('auto'), intervalHours * 60 * 60 * 1000).unref();
+  }
+
+  private writeBackupFile(reason: string) {
+    try {
+      const backupDir = join(dirname(this.storePath), 'backups');
+      mkdirSync(backupDir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      writeFileSync(join(backupDir, `erp-${reason}-${stamp}.json`), JSON.stringify({
+        exportedAt: new Date().toISOString(),
+        usdRate: this.usdRate,
+        usdRateUpdatedAt: this.usdRateUpdatedAt,
+        accounts: this.accounts,
+        products: this.products,
+        categories: this.categories,
+        sales: this.sales,
+        collections: this.collections,
+        paymentLogs: this.paymentLogs,
+        purchases: this.purchases,
+        supplierPayments: this.supplierPayments,
+        quotes: this.quotes,
+        pdfTemplates: this.pdfTemplates,
+        messageTemplates: this.messageTemplates,
+        orders: this.orders,
+        users: this.users,
+      }, null, 2), 'utf8');
+    } catch (error) {
+      console.error('Otomatik yedek yazilamadi.', error);
+    }
+  }
+
+  private requireAdmin(authorization?: string) {
+    const user = this.me(authorization);
+    if (user.role !== 'ADMIN') throw new UnauthorizedException('Admin yetkisi gerekli');
+    return user;
   }
 
   private persist() {

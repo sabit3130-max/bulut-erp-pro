@@ -1,4 +1,4 @@
-export type Role = 'ADMIN' | 'ACCOUNTING' | 'SALES' | 'WAREHOUSE' | 'CUSTOMER' | 'DEALER' | 'VIEWER';
+export type Role = 'ADMIN' | 'PERSONEL' | 'ACCOUNTING' | 'SALES' | 'WAREHOUSE' | 'CUSTOMER' | 'DEALER' | 'VIEWER';
 export type Currency = 'TRY' | 'USD';
 export type OrderStatus = 'Beklemede' | 'Onaylandi' | 'Hazirlaniyor' | 'Kargoda' | 'Teslim edildi' | 'Iptal edildi';
 

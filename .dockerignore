@@ -1,9 +1,8 @@
 node_modules
+apps/*/node_modules
 dist
-.env
-.env.local
-coverage
-uploads
+apps/*/dist
 data
 apps/*/data
 *.log
+.env

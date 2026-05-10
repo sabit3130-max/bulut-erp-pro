@@ -41,18 +41,18 @@ export class BusinessController {
   }
 
   @Get('users')
-  users() {
-    return this.data.listUsers();
+  users(@Headers('authorization') authorization?: string) {
+    return this.data.listUsers(authorization);
   }
 
   @Post('users')
-  createUser(@Body() body: { name: string; email: string; username?: string; password: string; role: 'CUSTOMER' | 'DEALER' | 'ADMIN' | 'ACCOUNTING' | 'SALES' | 'WAREHOUSE' | 'VIEWER'; accountId?: string; phone?: string; mustChangePassword?: boolean; active?: boolean }) {
-    return this.data.createUser(body);
+  createUser(@Headers('authorization') authorization: string | undefined, @Body() body: { name: string; email: string; username?: string; password: string; role: 'CUSTOMER' | 'DEALER' | 'ADMIN' | 'PERSONEL' | 'ACCOUNTING' | 'SALES' | 'WAREHOUSE' | 'VIEWER'; accountId?: string; phone?: string; mustChangePassword?: boolean; active?: boolean }) {
+    return this.data.createUser(authorization, body);
   }
 
   @Put('users/:id')
-  updateUser(@Param('id') id: string, @Body() body: { name?: string; email?: string; username?: string; password?: string; role?: 'CUSTOMER' | 'DEALER' | 'ADMIN' | 'ACCOUNTING' | 'SALES' | 'WAREHOUSE' | 'VIEWER'; accountId?: string; phone?: string; mustChangePassword?: boolean; active?: boolean }) {
-    return this.data.updateUser(id, body);
+  updateUser(@Headers('authorization') authorization: string | undefined, @Param('id') id: string, @Body() body: { name?: string; email?: string; username?: string; password?: string; role?: 'CUSTOMER' | 'DEALER' | 'ADMIN' | 'PERSONEL' | 'ACCOUNTING' | 'SALES' | 'WAREHOUSE' | 'VIEWER'; accountId?: string; phone?: string; mustChangePassword?: boolean; active?: boolean }) {
+    return this.data.updateUser(authorization, id, body);
   }
 
   @Get('exchange-rate')
@@ -66,13 +66,13 @@ export class BusinessController {
   }
 
   @Get('backup')
-  backup() {
-    return this.data.exportStore();
+  backup(@Headers('authorization') authorization?: string) {
+    return this.data.exportStore(authorization);
   }
 
   @Post('backup/import')
-  importBackup(@Body() body: ReturnType<DataService['exportStore']>) {
-    return this.data.importStore(body);
+  importBackup(@Headers('authorization') authorization: string | undefined, @Body() body: ReturnType<DataService['exportStore']>) {
+    return this.data.importStore(authorization, body);
   }
 
   @Get('accounts')

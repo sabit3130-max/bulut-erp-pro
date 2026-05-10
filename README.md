@@ -2,7 +2,7 @@
 
 React, TypeScript, TailwindCSS ve NestJS tabanli ERP / on muhasebe / B2B bayi yonetim sistemi.
 
-Bu surum demo ekrandan cikartilip kalici veri, JWT giris, bayi siparis akisi, odeme bildirimi ve panel testleriyle canli kuruluma hazirlanmistir. Varsayilan gelistirme modunda veriler `data/erp-store.json` dosyasinda kalici saklanir; PostgreSQL/Prisma semasi ve migration komutlari canli veritabani gecisi icin hazirdir.
+Bu surum canli kullanim icin hazirlanmistir. Backend acilista otomatik demo cari, urun, satis, tahsilat veya teklif olusturmaz. Varsayilan gelistirme modunda veriler `data/erp-store.json` dosyasinda kalici saklanir; PostgreSQL/Prisma semasi ve migration komutlari canli veritabani gecisi icin hazirdir.
 
 ## Hizli Baslangic
 
@@ -12,7 +12,7 @@ npm run dev
 ```
 
 - Web panel: http://localhost:5173
-- API: http://localhost:3001/api
+- API: http://localhost:3000/api
 
 ## Production Build
 
@@ -23,40 +23,45 @@ npm --workspace apps/web run build
 node apps/api/dist/main.js
 ```
 
-Frontend build ciktisi `apps/web/dist` klasorundedir. API varsayilan olarak `PORT=3001` ile calisir.
+Frontend build ciktisi `apps/web/dist` klasorundedir. API varsayilan olarak `PORT=3000` ile calisir.
 
 ## Ortam Degiskenleri
 
 Kok dizindeki `.env.example` dosyasini `.env` olarak kopyalayin.
 
 ```bash
-PORT=3001
+PORT=3000
 JWT_SECRET=change-this-in-production
 DATABASE_URL=postgresql://erp:erp_password@localhost:5432/erp_b2b?schema=public
 WEB_ORIGIN=https://erp.siteniz.com
-VITE_API_URL=https://erp.siteniz.com/api
+VITE_API_URL=https://api.erp.siteniz.com
+ADMIN_EMAIL=admin@siteniz.com
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=guclu-gecici-sifre
+ADMIN_NAME=Sistem Yoneticisi
+ADMIN_MUST_CHANGE_PASSWORD=true
+AUTO_BACKUP_ENABLED=true
+AUTO_BACKUP_INTERVAL_HOURS=24
 ```
 
 `JWT_SECRET` production ortaminda mutlaka guclu ve gizli bir deger olmalidir.
 
 ## Kullanici Girisleri
 
-Varsayilan seed kullanicilari:
-
-- Admin: `admin@demo.local` / `admin123`
-- Muhasebe: `muhasebe@demo.local` / `muhasebe123`
-- Satis: `satis@demo.local` / `satis123`
-- Depo: `depo@demo.local` / `depo123`
-- Bayi: `bayi@demo.local` / `bayi123`
+Canli sistemde varsayilan demo kullanici olusturulmaz. Ilk admin kullanicisi sadece `ADMIN_EMAIL` ve `ADMIN_PASSWORD` ortam degiskenleri verilirse otomatik olusturulur. Bu islem demo veri eklemez; ayni e-posta veya kullanici adi varsa mevcut canli kullanici korunur.
 
 Sifreler API tarafinda hashlenmis olarak tutulur; login JWT token dondurur. Musteri/bayi girisi icin ayrica:
 
-- Login sayfasi: `http://localhost:5173/login`
+- Admin girisi: `http://localhost:5173/admin-giris`
+- Bayi/musteri girisi: `http://localhost:5173/bayi-giris`
+- Genel login: `http://localhost:5173/login`
+- Admin paneli > `Kullanicilar`
 - Cari detay sayfasi > `Kullanici hesabi olustur`
-- Roller: `CUSTOMER` ve `DEALER`
+- Roller: `ADMIN`, `PERSONEL`, `CUSTOMER`, `DEALER`
 - Admin gecici sifre uretebilir; ilk giriste musteri yeni sifre belirler.
 - Kullanici adi veya e-posta ile giris desteklenir.
 - Portal endpointleri token uzerindeki `accountId` ile calisir; musteri/bayi baska carinin verisini gormez.
+- Kullanici ve yedek endpointleri admin token ister; pasif kullanici giris yapamaz.
 
 ## Kalici Veri
 
@@ -66,7 +71,9 @@ Gelistirme ve tek sunucu kullaniminda veriler:
 data/erp-store.json
 ```
 
-dosyasina yazilir. Uygulama kapanip acildiginda cari, urun, satis, alis, tahsilat, teklif, kategori, siparis ve odeme bildirimleri korunur. Demo seed sadece store dosyasi yoksa ilk kurulumda olusur.
+dosyasina yazilir. Uygulama kapanip acildiginda cari, urun, satis, alis, tahsilat, teklif, kategori, siparis ve odeme bildirimleri korunur. Store dosyasi yoksa sistem bos baslar; otomatik demo veri olusturulmaz.
+
+Otomatik yedek icin `AUTO_BACKUP_ENABLED=true` yapin. Yedekler varsayilan olarak `data/backups` klasorune JSON dosyasi olarak yazilir. Bu klasoru VPS uzerinde kalici volume/disk olarak baglayin.
 
 ## PostgreSQL / Prisma
 
@@ -75,7 +82,6 @@ PostgreSQL servisini baslatmak icin:
 ```bash
 docker compose up -d db
 npm --workspace apps/api run db:migrate
-npm --workspace apps/api run db:seed
 ```
 
 Prisma semasi `apps/api/prisma/schema.prisma` icindedir. Canli kurulumda onerilen yol, mevcut JSON store verisini yedekleyip PostgreSQL migration sonrasi import etmektir.
@@ -128,3 +134,16 @@ Prisma semasi `apps/api/prisma/schema.prisma` icindedir. Canli kurulumda onerile
 - `WEB_ORIGIN` alanini gercek domain ile ayarlayin.
 - `data/erp-store.json` icin duzenli yedek alin veya PostgreSQL’e gecin.
 - POS entegrasyonu icin Iyzico/PayTR/Param/Tosla gercek merchant bilgilerini `.env` uzerinden tanimlayin.
+
+## Canli Domain, SSL ve Pilot Sirasi
+
+1. Demo veri otomatik olusmadigini dogrulayin.
+2. `ADMIN_EMAIL` / `ADMIN_PASSWORD` ile ilk admini olusturun.
+3. Admin olarak girip `Kullanicilar` ekranindan personel ve bayi kullanicilarini acin.
+4. `/bayi-giris` uzerinden bir bayi ile giris testi yapin.
+5. `AUTO_BACKUP_ENABLED=true` ile otomatik yedegi acip ilk yedek dosyasinin olustugunu kontrol edin.
+6. Gercek domain ve SSL'i Nginx/Caddy/Traefik/Coolify reverse proxy uzerinden aktif edin.
+7. Frontend icin `VITE_API_URL=https://api.erp.siteniz.com` kullanin.
+8. Test senaryosunu uygulayin: urun ekle, cari ekle, bayi siparisi ver, admin onayla, satisa donustur, tahsilat gir.
+9. Once 3-5 bayiyle pilot kullanima alin.
+10. Pilot siparis/odeme/veri kaliciligi sorunsuzsa tum bayilere acin.
