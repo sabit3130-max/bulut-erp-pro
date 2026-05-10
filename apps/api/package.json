@@ -7,7 +7,8 @@
     "build": "nest build",
     "lint": "eslint \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit",
-    "db:migrate": "prisma migrate deploy",
+    "guard:migration": "node scripts/guard-production-migration.cjs",
+    "db:migrate": "npm run guard:migration && prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev"
   },
   "dependencies": {

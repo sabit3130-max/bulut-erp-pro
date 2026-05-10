@@ -78,6 +78,17 @@ function DualMoney({ tryValue, usdValue, compact = false }: { tryValue: number; 
   );
 }
 
+function FinanceDisplay({ tryValue, usdValue }: { tryValue: number; usdValue: number }) {
+  const showTry = Math.abs(tryValue) > 0.004 || Math.abs(usdValue) < 0.004;
+  const showUsd = Math.abs(usdValue) > 0.004;
+  return (
+    <div className="flex flex-col gap-1">
+      {showTry && <span className="inline-flex w-fit rounded bg-[#dfeeff] px-2 py-1 text-xs font-bold text-[#1d5d99]">{money(tryValue)}</span>}
+      {showUsd && <span className="inline-flex w-fit rounded bg-[#d7f2ea] px-2 py-1 text-xs font-bold text-ocean">{money(usdValue, 'USD')}</span>}
+    </div>
+  );
+}
+
 function PriorityMoney({ currency, tryValue, usdValue, large = false }: { currency: 'TRY' | 'USD'; tryValue: number; usdValue: number; large?: boolean }) {
   const primary = currency === 'USD' ? money(usdValue, 'USD') : money(tryValue);
   const secondary = currency === 'USD' ? money(tryValue) : money(usdValue, 'USD');
@@ -3379,6 +3390,10 @@ function AccountDetailPage({ usdRate, detail, products, accounts, users, onCreat
   const totalRevenueUsd = account.totalRevenueUsd ?? detail.sales.reduce((sum, sale) => sum + (sale.currency === 'USD' ? sale.total : 0), 0);
   const remainingDebtTry = Math.max(0, account.balanceTry);
   const remainingDebtUsd = Math.max(0, account.balanceUsd);
+  const totalRevenueDisplayTry = account.totalRevenueDisplayTry ?? (totalRevenueUsd > 0 ? tryFromUsd(totalRevenueUsd, usdRate) : totalRevenueTry);
+  const totalRevenueDisplayUsd = account.totalRevenueDisplayUsd ?? (totalRevenueUsd > 0 ? totalRevenueUsd : 0);
+  const remainingDisplayTry = account.balanceDisplayTry ?? (remainingDebtUsd > 0 ? tryFromUsd(remainingDebtUsd, usdRate) : remainingDebtTry);
+  const remainingDisplayUsd = account.balanceDisplayUsd ?? (remainingDebtUsd > 0 ? remainingDebtUsd : 0);
   const [tab, setTab] = useState('Cari Ekstre');
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [collectionOpen, setCollectionOpen] = useState(false);
@@ -3478,8 +3493,8 @@ function AccountDetailPage({ usdRate, detail, products, accounts, users, onCreat
           {accountSummary.map(([label, value, tone]) => <SummaryCard key={label} label={label} value={value} tone={tone} />)}
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded border border-line bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900"><div className="text-sm text-slate-500">Toplam ciro</div><div className="mt-2"><DualMoney tryValue={totalRevenueTry} usdValue={totalRevenueUsd} /></div></div>
-          <div className="rounded border border-line bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900"><div className="text-sm text-slate-500">Kalan bakiye</div><div className="mt-2"><DualMoney tryValue={remainingDebtTry} usdValue={remainingDebtUsd} /></div></div>
+          <div className="rounded border border-line bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900"><div className="text-sm text-slate-500">Toplam ciro</div><div className="mt-2"><FinanceDisplay tryValue={totalRevenueDisplayTry} usdValue={totalRevenueDisplayUsd} /></div></div>
+          <div className="rounded border border-line bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900"><div className="text-sm text-slate-500">Kalan bakiye</div><div className="mt-2"><FinanceDisplay tryValue={remainingDisplayTry} usdValue={remainingDisplayUsd} /></div></div>
         </div>
       </Panel>
       <div className="flex flex-wrap gap-2">

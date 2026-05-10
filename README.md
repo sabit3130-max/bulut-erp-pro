@@ -36,6 +36,8 @@ JWT_SECRET=change-this-in-production
 DATABASE_URL=postgresql://erp:erp_password@localhost:5432/erp_b2b?schema=public
 ERP_STORE_PATH=/app/data/erp-store.json
 ALLOW_DATA_IMPORT=false
+DB_BACKUP_CONFIRMED=false
+DB_BACKUP_FILE=
 WEB_ORIGIN=https://erp.siteniz.com
 VITE_API_URL=https://api.erp.siteniz.com
 ADMIN_EMAIL=admin@buluterp.local
@@ -91,7 +93,9 @@ docker compose up -d db
 npm --workspace apps/api run db:migrate
 ```
 
-`db:migrate` production icin `prisma migrate deploy` calistirir; veri silmez, sadece migration dosyalarini uygular. Gelistirme migration'i uretmek icin `npm --workspace apps/api run db:migrate:dev` kullanin. `prisma migrate reset` canli sistemde kesinlikle kullanilmaz.
+`db:migrate` production icin once canli veri koruma kontrolu calistirir, sonra `prisma migrate deploy` uygular. Migration icinde `DROP TABLE`, `TRUNCATE`, `DELETE FROM`, `DROP COLUMN` gibi veri silen SQL varsa komut fail olur. `NODE_ENV=production` iken migration icin `DB_BACKUP_CONFIRMED=true` veya mevcut bir `DB_BACKUP_FILE=/path/backup.sql` zorunludur.
+
+Gelistirme migration'i uretmek icin `npm --workspace apps/api run db:migrate:dev` kullanin. `prisma migrate reset`, `db push --force-reset`, truncate/delete scriptleri canli sistemde kesinlikle kullanilmaz.
 
 Prisma semasi `apps/api/prisma/schema.prisma` icindedir. Canli kurulumda onerilen yol, mevcut JSON store verisini yedekleyip PostgreSQL migration sonrasi kontrollu import etmektir.
 

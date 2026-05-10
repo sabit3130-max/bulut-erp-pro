@@ -28,6 +28,10 @@ export interface Account {
   lastTransactionDate?: string;
   totalRevenueTry?: number;
   totalRevenueUsd?: number;
+  totalRevenueDisplayTry?: number;
+  totalRevenueDisplayUsd?: number;
+  balanceDisplayTry?: number;
+  balanceDisplayUsd?: number;
 }
 
 export interface UserSession {

@@ -1682,12 +1682,17 @@ export class DataService {
     const allDates = [...saleDates, ...collectionDates, ...purchaseDates, ...this.supplierPayments.filter((item) => item.supplierId === account.id).map((item) => item.createdAt)].sort((a, b) => b.localeCompare(a));
     const sales = this.sales.filter((item) => this.saleBelongsToAccount(item, account));
     const balance = this.accountBalanceSummary(account);
+    const revenue = this.accountRevenueSummary(sales);
     return {
       ...account,
       balanceTry: balance.balanceTry,
       balanceUsd: balance.balanceUsd,
-      totalRevenueTry: this.round(sales.filter((sale) => sale.currency === 'TRY').reduce((sum, sale) => sum + sale.total, 0)),
-      totalRevenueUsd: this.round(sales.filter((sale) => sale.currency === 'USD').reduce((sum, sale) => sum + sale.total, 0)),
+      balanceDisplayTry: balance.displayTry,
+      balanceDisplayUsd: balance.displayUsd,
+      totalRevenueTry: revenue.totalTry,
+      totalRevenueUsd: revenue.totalUsd,
+      totalRevenueDisplayTry: revenue.displayTry,
+      totalRevenueDisplayUsd: revenue.displayUsd,
       lastSaleDate: saleDates.sort((a, b) => b.localeCompare(a))[0] || account.lastSaleDate,
       lastCollectionDate: collectionDates.sort((a, b) => b.localeCompare(a))[0] || account.lastCollectionDate,
       lastPurchaseDate: purchaseDates.sort((a, b) => b.localeCompare(a))[0] || account.lastPurchaseDate,
@@ -1716,7 +1721,23 @@ export class DataService {
       balanceTry = this.round(balanceTry - tryOffset);
       balanceUsd = 0;
     }
-    return { balanceTry, balanceUsd };
+    return {
+      balanceTry,
+      balanceUsd,
+      displayTry: balanceUsd > 0 ? this.round(balanceUsd * this.usdRate) : Math.max(0, balanceTry),
+      displayUsd: balanceUsd > 0 ? balanceUsd : 0,
+    };
+  }
+
+  private accountRevenueSummary(sales: Sale[]) {
+    const totalTry = this.round(sales.filter((sale) => sale.currency === 'TRY').reduce((sum, sale) => sum + sale.total, 0));
+    const totalUsd = this.round(sales.filter((sale) => sale.currency === 'USD').reduce((sum, sale) => sum + sale.total, 0));
+    return {
+      totalTry,
+      totalUsd,
+      displayTry: totalUsd > 0 ? this.round(totalUsd * this.usdRate) : Math.max(0, totalTry),
+      displayUsd: totalUsd > 0 ? totalUsd : 0,
+    };
   }
 
   private round(value: number) {
