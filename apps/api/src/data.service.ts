@@ -412,7 +412,7 @@ export class DataService {
 
   deleteCategory(id: string) {
     const category = this.findCategory(id);
-    if (this.products.some((product) => product.category === category.name || product.subCategory === category.name)) throw new BadRequestException('Urunu olan kategori silinemez');
+    if (this.products.some((product) => product.category === category.name || product.subCategory === category.name)) throw new BadRequestException('Bu kategoride urun var');
     this.categories = this.categories.filter((item) => item.id !== id);
     this.persist();
     return { deleted: true };
@@ -1195,6 +1195,7 @@ export class DataService {
     const collection = this.collections.find((item) => item.id === collectionId);
     if (!collection) throw new NotFoundException('Tahsilat bulunamadi');
     const account = this.findAccount(collection.accountId);
+    const values = this.collectionDualValues(collection, account);
     return {
       company: 'Firma',
       receiptNo: collection.receiptNo || `MKB-${collection.id.toUpperCase()}`,
@@ -1202,13 +1203,13 @@ export class DataService {
       accountCode: account.code,
       method: collection.method,
       amount: collection.amount,
-      amountTry: collection.tlAmount ?? (collection.currency === 'TRY' ? collection.amount : 0),
-      amountUsd: collection.usdAmount ?? (collection.currency === 'USD' ? collection.amount : 0),
-      exchangeRate: collection.exchangeRate ?? this.usdRate,
-      appliedToTlBalance: collection.appliedToTlBalance ?? 0,
-      appliedToUsdBalance: collection.appliedToUsdBalance ?? 0,
-      remainingTry: collection.remainingTlBalance ?? account.balanceTry,
-      remainingUsd: collection.remainingUsdBalance ?? account.balanceUsd,
+      amountTry: values.tlAmount,
+      amountUsd: values.usdAmount,
+      exchangeRate: values.rate,
+      appliedToTlBalance: values.appliedToTlBalance,
+      appliedToUsdBalance: values.appliedToUsdBalance,
+      remainingTry: values.remainingTry,
+      remainingUsd: values.remainingUsd,
       description: collection.description || '',
       currency: collection.currency,
       status: collection.status ?? 'basarili',
@@ -1222,11 +1223,10 @@ export class DataService {
     if (!collection) throw new NotFoundException('Tahsilat bulunamadi');
     const account = this.findAccount(collection.accountId);
     const date = new Date(collection.createdAt).toLocaleDateString('tr-TR');
-    const amountTry = collection.currency === 'TRY' ? collection.amount : 0;
-    const amountUsd = collection.currency === 'USD' ? collection.amount : 0;
+    const values = this.collectionDualValues(collection, account);
     const message = collection.status === 'basarisiz' || collection.status === 'beklemede'
-      ? `Merhaba ${account.contactName},\n${date} tarihinde otomatik tahsilat islemi basarisiz olmustur.\n\nOdenmesi gereken tutar:\n${amountTry} TL\n${amountUsd} USD\n\nOdeme yapmak icin:\n${collection.paymentLink}\n\nFirma`
-      : `Merhaba ${account.contactName},\n${date} tarihinde ${amountTry} TL / ${amountUsd} USD odemeniz basariyla alinmistir.\n\nKalan bakiyeniz:\n${account.balanceTry} TL\n${account.balanceUsd} USD\n\nTesekkur ederiz.\nFirma`;
+      ? `Merhaba ${account.contactName || account.companyName},\n${date} tarihinde otomatik tahsilat islemi basarisiz olmustur.\n\nOdenmesi gereken tutar:\n${this.moneyText(values.tlAmount, 'TL')}\n${this.moneyText(values.usdAmount, 'USD')}\n\nOdeme yapmak icin:\n${collection.paymentLink}\n\nFirma`
+      : `Merhaba ${account.contactName || account.companyName},\n\n${date} tarihinde\n${this.moneyText(values.tlAmount, 'TL')} / ${this.moneyText(values.usdAmount, 'USD')} karsiligi odemeniz basariyla alinmistir.\n\nKalan bakiyeniz:\n${this.moneyText(values.remainingTry, 'TL')}\n${this.moneyText(values.remainingUsd, 'USD')}\n\nTesekkur ederiz.\nFirma`;
     return { to: account.whatsapp, message, link: this.whatsappLink(account.whatsapp, message) };
   }
 
@@ -1753,6 +1753,22 @@ export class DataService {
     };
   }
 
+  private collectionDualValues(collection: Collection, account?: Account) {
+    const targetAccount = account ?? this.findAccount(collection.accountId);
+    const rate = collection.exchangeRate && collection.exchangeRate > 1 ? collection.exchangeRate : this.usdRate;
+    const tlAmount = this.round(collection.tlAmount ?? (collection.currency === 'TRY' ? collection.amount : collection.amount * rate));
+    const usdAmount = this.round(collection.usdAmount ?? (collection.currency === 'USD' ? collection.amount : collection.amount / rate));
+    return {
+      rate,
+      tlAmount,
+      usdAmount,
+      appliedToTlBalance: this.round(collection.appliedToTlBalance ?? (collection.currency === 'TRY' ? collection.amount : 0)),
+      appliedToUsdBalance: this.round(collection.appliedToUsdBalance ?? (collection.currency === 'USD' ? collection.amount : 0)),
+      remainingTry: this.round(collection.remainingTlBalance ?? targetAccount.balanceTry),
+      remainingUsd: this.round(collection.remainingUsdBalance ?? targetAccount.balanceUsd),
+    };
+  }
+
   private dualDisplay(tryValue: number, usdValue: number) {
     const positiveTry = Math.max(0, this.round(tryValue));
     const positiveUsd = Math.max(0, this.round(usdValue));
@@ -1770,6 +1786,10 @@ export class DataService {
 
   private round(value: number) {
     return Math.round(value * 100) / 100;
+  }
+
+  private moneyText(value: number, currency: 'TL' | 'USD') {
+    return `${new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 2 }).format(this.round(value))} ${currency}`;
   }
 
   private number(value: unknown, fallback = 0) {

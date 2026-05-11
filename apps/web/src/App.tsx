@@ -1376,27 +1376,40 @@ function PurchaseDetailModal({ purchase, products, accounts, fallbackRate, onClo
 }
 
 function CategoriesView({ categories, onNotice, onRefresh }: { categories: Category[]; onNotice: (message: string) => void; onRefresh: () => Promise<void> }) {
-  const empty = { name: '', parentId: '', description: '', vatRate: 20, defaultProfitRate: 25, active: true };
+  const empty = { name: '', parentId: '', description: '', vatRate: 20, defaultProfitRate: 25, discountRate: 0, criticalStockLimit: 10, active: true };
   const [form, setForm] = useState<Partial<Category>>(empty);
   const [editingId, setEditingId] = useState('');
+  const [modalOpen, setModalOpen] = useState(false);
+  function openCreate() {
+    setEditingId('');
+    setForm(empty);
+    setModalOpen(true);
+  }
   async function saveCategory() {
     try {
+      if (!form.name?.trim()) {
+        onNotice('Kategori adi bos birakilamaz');
+        return;
+      }
       const payload = { ...form, icon: form.icon || 'Tags', sortOrder: form.sortOrder || categories.length + 1, dealerPriceRate: form.defaultProfitRate, criticalStockLimit: form.criticalStockLimit || 10, discountRate: form.discountRate || 0 };
       if (editingId) await apiPut(`/categories/${editingId}`, payload);
       else await apiPost('/categories', payload);
       await onRefresh();
       setForm(empty);
       setEditingId('');
+      setModalOpen(false);
       onNotice(editingId ? 'Kategori guncellendi' : 'Kategori eklendi');
     } catch (error) { onNotice(errorMessage(error)); }
   }
   function edit(category: Category) {
     setEditingId(category.id);
     setForm(category);
+    setModalOpen(true);
   }
   function addSub(parent: Category) {
     setEditingId('');
-    setForm({ ...empty, parentId: parent.id, name: `${parent.name} Alt` });
+    setForm({ ...empty, parentId: parent.id });
+    setModalOpen(true);
   }
   async function toggle(category: Category) {
     await apiPut(`/categories/${category.id}`, { active: !category.active });
@@ -1412,18 +1425,48 @@ function CategoriesView({ categories, onNotice, onRefresh }: { categories: Categ
   }
   return (
     <section className="space-y-5">
-      <Panel title={editingId ? 'Kategori duzenle' : 'Yeni kategori'}>
-        <div className="grid gap-3 md:grid-cols-6">
-          <FormInput label="Kategori adi" value={form.name} onChange={(name) => setForm({ ...form, name })} />
-          <FormSelect label="Ust kategori" value={form.parentId ?? ''} onChange={(parentId) => setForm({ ...form, parentId })} options={[{ label: 'Ana kategori', value: '' }, ...categories.filter((item) => item.id !== editingId).map((item) => ({ label: item.name, value: item.id }))]} />
-          <FormInput label="Aciklama" value={form.description} onChange={(description) => setForm({ ...form, description })} />
-          <FormNumber label="KDV %" value={Number(form.vatRate ?? 20)} setValue={(vatRate) => setForm({ ...form, vatRate })} />
-          <FormNumber label="Varsayilan kar %" value={Number(form.defaultProfitRate ?? form.dealerPriceRate ?? 25)} setValue={(defaultProfitRate) => setForm({ ...form, defaultProfitRate })} />
-          <label className="mt-6 flex items-center gap-2 text-sm"><input type="checkbox" checked={form.active ?? true} onChange={(event) => setForm({ ...form, active: event.target.checked })} /> Aktif</label>
-        </div>
-        <div className="mt-4 flex gap-2"><Button onClick={saveCategory} icon={<Plus size={17} />}>{editingId ? 'Guncelle' : 'Kategori ekle'}</Button>{editingId && <Button variant="soft" onClick={() => { setEditingId(''); setForm(empty); }}>Vazgec</Button>}</div>
-      </Panel>
-      <DataTable title="Kategori yonetimi" headers={['Sira', 'Ikon', 'Kategori', 'Ust kategori', 'Aktif', 'Kar %', 'Iskonto %', 'KDV %', 'Kritik', 'Urun', 'Stok degeri', 'Toplam satis', 'Islem']} rows={categories.map((category) => [category.sortOrder, category.icon, category.name, categories.find((item) => item.id === category.parentId)?.name ?? '-', category.active ? 'Aktif' : 'Pasif', category.defaultProfitRate ?? category.dealerPriceRate, category.discountRate, category.vatRate, category.criticalStockLimit, category.productCount ?? 0, money(category.stockValue ?? 0), money(category.totalSales ?? 0), <Toolbar key={category.id}><Button variant="soft" onClick={() => edit(category)} icon={<Edit3 size={16} />}>Duzenle</Button><Button variant="soft" onClick={() => addSub(category)} icon={<Plus size={16} />}>Alt kategori</Button><Button variant="soft" onClick={() => toggle(category)}>{category.active ? 'Pasif yap' : 'Aktif yap'}</Button><Button variant="soft" onClick={() => remove(category)} icon={<Trash2 size={16} />}>Sil</Button></Toolbar>])} />
+      <DataTable
+        title="Kategori yonetimi"
+        actions={<Button onClick={openCreate} icon={<Plus size={17} />}>Yeni kategori</Button>}
+        headers={['Kategori adi', 'Ust kategori', 'Urun sayisi', 'Durum', 'Islem']}
+        rows={categories.map((category) => [
+          <div key={`${category.id}-name`}><div className="font-bold text-ink dark:text-white">{category.name}</div>{category.description && <div className="mt-1 line-clamp-2 text-xs text-slate-500">{category.description}</div>}</div>,
+          categories.find((item) => item.id === category.parentId)?.name ?? '-',
+          <span key={`${category.id}-count`} className="font-bold">{category.productCount ?? 0}</span>,
+          <Badge key={`${category.id}-status`}>{category.active ? 'Aktif' : 'Pasif'}</Badge>,
+          <div key={category.id} className="flex min-w-max flex-nowrap items-center gap-2">
+            <Button className="h-9 whitespace-nowrap px-3" variant="soft" onClick={() => edit(category)} icon={<Edit3 size={16} />}>Duzenle</Button>
+            <Button className="h-9 whitespace-nowrap px-3" variant="soft" onClick={() => addSub(category)} icon={<Plus size={16} />}>Alt kategori</Button>
+            <Button className="h-9 whitespace-nowrap px-3" variant="soft" onClick={() => toggle(category)}>{category.active ? 'Pasif' : 'Aktif'}</Button>
+            <Button className="h-9 whitespace-nowrap px-3" variant="soft" onClick={() => remove(category)} icon={<Trash2 size={16} />}>Sil</Button>
+          </div>,
+        ])}
+      />
+      {modalOpen && (
+        <ModalFrame title={editingId ? 'Kategori duzenle' : 'Yeni kategori'} onClose={() => { setModalOpen(false); setEditingId(''); setForm(empty); }}>
+          <div className="space-y-4">
+            <FormGrid>
+              <FormInput label="Kategori adi" value={form.name} onChange={(name) => setForm({ ...form, name })} />
+              <FormSelect label="Ust kategori" value={form.parentId ?? ''} onChange={(parentId) => setForm({ ...form, parentId })} options={[{ label: 'Ana kategori', value: '' }, ...categories.filter((item) => item.id !== editingId).map((item) => ({ label: item.name, value: item.id }))]} />
+              <FormInput label="Aciklama" value={form.description} onChange={(description) => setForm({ ...form, description })} />
+              <label className="mt-6 flex items-center gap-2 text-sm font-semibold text-slate-600 dark:text-slate-300"><input type="checkbox" checked={form.active ?? true} onChange={(event) => setForm({ ...form, active: event.target.checked })} /> Aktif</label>
+            </FormGrid>
+            <details className="rounded-2xl border border-line bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+              <summary className="cursor-pointer text-sm font-black text-ocean">Gelismis ayarlar</summary>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <FormNumber label="KDV %" value={Number(form.vatRate ?? 20)} setValue={(vatRate) => setForm({ ...form, vatRate })} />
+                <FormNumber label="Varsayilan kar %" value={Number(form.defaultProfitRate ?? form.dealerPriceRate ?? 25)} setValue={(defaultProfitRate) => setForm({ ...form, defaultProfitRate })} />
+                <FormNumber label="Iskonto %" value={Number(form.discountRate ?? 0)} setValue={(discountRate) => setForm({ ...form, discountRate })} />
+                <FormNumber label="Kritik stok" value={Number(form.criticalStockLimit ?? 10)} setValue={(criticalStockLimit) => setForm({ ...form, criticalStockLimit })} />
+              </div>
+            </details>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-line pt-4 dark:border-slate-700">
+              <Button variant="soft" onClick={() => { setModalOpen(false); setEditingId(''); setForm(empty); }}>Iptal</Button>
+              <Button onClick={saveCategory} icon={<Plus size={17} />}>{editingId ? 'Kaydet' : 'Kategori ekle'}</Button>
+            </div>
+          </div>
+        </ModalFrame>
+      )}
     </section>
   );
 }
@@ -2412,17 +2455,20 @@ function CollectionsView({ usdRate, selectedAccountId, accounts, collections, pa
       <DataTable
         title="Tahsilat listesi"
         headers={['Cari', 'Tutar TL', 'Tutar USD', 'Yontem', 'Durum', 'Tarih', 'Makbuz', 'Yazdir', 'WhatsApp']}
-        rows={collections.map((item) => [
-          item.accountName ?? accounts.find((account) => account.id === item.accountId)?.companyName ?? item.accountId,
-          money(item.tlAmount ?? (item.currency === 'TRY' ? item.amount : 0)),
-          money(item.usdAmount ?? (item.currency === 'USD' ? item.amount : 0), 'USD'),
-          item.method,
-          <Badge key={`${item.id}-status`}>{item.status ?? 'basarili'}</Badge>,
-          new Date(item.createdAt).toLocaleDateString('tr-TR'),
-          <Button key={`${item.id}-receipt`} variant="soft" onClick={() => showReceipt(item.id)} icon={<FileText size={16} />}>Makbuz</Button>,
-          <Button key={`${item.id}-print`} variant="soft" onClick={() => showReceipt(item.id, true)} icon={<FileDown size={16} />}>Yazdir</Button>,
-          <Button key={`${item.id}-wa`} variant="soft" onClick={() => sendCollectionMessage(item.id)} icon={<MessageCircle size={16} />}>Mesaj</Button>,
-        ])}
+        rows={collections.map((item) => {
+          const rate = item.exchangeRate && item.exchangeRate > 1 ? item.exchangeRate : usdRate;
+          return [
+            item.accountName ?? accounts.find((account) => account.id === item.accountId)?.companyName ?? item.accountId,
+            money(item.tlAmount ?? (item.currency === 'TRY' ? item.amount : tryFromUsd(item.amount, rate))),
+            money(item.usdAmount ?? (item.currency === 'USD' ? item.amount : usdFromTry(item.amount, rate)), 'USD'),
+            item.method,
+            <Badge key={`${item.id}-status`}>{item.status ?? 'basarili'}</Badge>,
+            new Date(item.createdAt).toLocaleDateString('tr-TR'),
+            <Button key={`${item.id}-receipt`} variant="soft" onClick={() => showReceipt(item.id)} icon={<FileText size={16} />}>Makbuz</Button>,
+            <Button key={`${item.id}-print`} variant="soft" onClick={() => showReceipt(item.id, true)} icon={<FileDown size={16} />}>Yazdir</Button>,
+            <Button key={`${item.id}-wa`} variant="soft" onClick={() => sendCollectionMessage(item.id)} icon={<MessageCircle size={16} />}>Mesaj</Button>,
+          ];
+        })}
       />
       <DataTable title="Odeme loglari" headers={['Cari', 'POS', 'Durum', 'Tutar', 'Mesaj', 'Tarih']} rows={paymentLogs.map((log) => [log.accountName ?? log.accountId, log.provider, log.status, money(log.amount, log.currency === 'USD' ? 'USD' : 'TL'), log.message, new Date(log.createdAt).toLocaleString('tr-TR')])} />
     </section>
@@ -3695,6 +3741,11 @@ function AccountPurchaseModal({ account, products, usdRate, onClose, onSaved, on
 }
 
 function CollectionDetailModal({ collection, account, usdRate, onClose, onNotice }: { collection: Collection; account: Account; usdRate: number; onClose: () => void; onNotice: (message: string) => void }) {
+  const rate = collection.exchangeRate && collection.exchangeRate > 1 ? collection.exchangeRate : usdRate;
+  const tahsilatTry = collection.tlAmount ?? (collection.currency === 'TRY' ? collection.amount : tryFromUsd(collection.amount, rate));
+  const tahsilatUsd = collection.usdAmount ?? (collection.currency === 'USD' ? collection.amount : usdFromTry(collection.amount, rate));
+  const remainingTry = collection.remainingTlBalance ?? account.balanceTry;
+  const remainingUsd = collection.remainingUsdBalance ?? account.balanceUsd;
   async function sendMessage() {
     try {
       const result = await apiPost<{ link: string }>(`/whatsapp/collections/${collection.id}`);
@@ -3709,12 +3760,12 @@ function CollectionDetailModal({ collection, account, usdRate, onClose, onNotice
       <div className="space-y-4">
         <div className="grid gap-3 md:grid-cols-3">
           <Info label="Cari" value={account.companyName} /><Info label="Tarih" value={new Date(collection.createdAt).toLocaleString('tr-TR')} /><Info label="Yontem" value={collection.method} />
-          <Info label="Kur" value={String(collection.exchangeRate ?? usdRate)} /><Info label="Durum" value={collection.status ?? 'basarili'} /><Info label="Aciklama" value={collection.description ?? '-'} />
+          <Info label="Kur" value={String(rate)} /><Info label="Durum" value={collection.status ?? 'basarili'} /><Info label="Aciklama" value={collection.description ?? '-'} />
         </div>
         <div className="grid gap-3 md:grid-cols-3">
-          <DualSummary label="Tahsil edilen" tryValue={collection.tlAmount ?? (collection.currency === 'TRY' ? collection.amount : tryFromUsd(collection.amount, usdRate))} usdValue={collection.usdAmount ?? (collection.currency === 'USD' ? collection.amount : usdFromTry(collection.amount, usdRate))} />
+          <DualSummary label="Tahsilat TL / USD karsiligi" tryValue={tahsilatTry} usdValue={tahsilatUsd} />
           <DualSummary label="Bakiyeye uygulanan" tryValue={collection.appliedToTlBalance ?? 0} usdValue={collection.appliedToUsdBalance ?? 0} />
-          <DualSummary label="Kalan bakiye" tryValue={collection.remainingTlBalance ?? account.balanceTry} usdValue={collection.remainingUsdBalance ?? account.balanceUsd} strong />
+          <DualSummary label="Kalan bakiye" tryValue={remainingTry} usdValue={remainingUsd} strong />
         </div>
         <div className="flex justify-end gap-2"><Button variant="soft" onClick={() => window.print()} icon={<FileDown size={17} />}>Makbuz yazdir</Button><Button onClick={sendMessage} icon={<MessageCircle size={17} />}>WhatsApp gonder</Button></div>
       </div>
