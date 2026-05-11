@@ -509,7 +509,7 @@ export function App() {
     if (detail) return <AccountDetailPage usdRate={dashboard.usdRate} detail={detail} products={products} accounts={accounts} users={users} onCreateUser={createUserForAccount} onBack={() => { setDetail(null); window.history.pushState({}, '', '/'); }} onSale={startAccountSale} onCollection={startAccountCollection} onPurchase={startAccountPurchase} onSupplierPayment={createSupplierPaymentFromDetail} onDebt={sendDebtMessage} onNotice={setNotice} onReload={async () => { await refresh(); setDetail(await apiGet<AccountDetail>(`/accounts/${detail.account.id}`)); }} />;
     if (productDetailId) return <ProductDetailPage productId={productDetailId} usdRate={dashboard.usdRate} products={products} accounts={accounts} sales={sales} purchases={purchases} quotes={quotes} orders={orders} onBack={() => { setProductDetailId(''); window.history.pushState({}, '', '/'); }} onEdit={(product) => { setEditingProduct(product); setModal('product'); }} onDelete={deleteProduct} onArchive={archiveProduct} onNotice={setNotice} />;
     if (active === 'dashboard') return <DashboardView dashboard={dashboard} sales={sales} products={products} accounts={accounts} onNotice={setNotice} />;
-    if (active === 'accounts') return <AccountsView accounts={accounts} onAdd={() => { setEditingAccount(null); setModal('account'); }} onEdit={(account) => { setEditingAccount(account); setModal('account'); }} onDelete={deleteAccount} onDetail={openDetail} onDebt={sendDebtMessage} />;
+    if (active === 'accounts') return <AccountsView accounts={accounts} usdRate={dashboard.usdRate} onAdd={() => { setEditingAccount(null); setModal('account'); }} onEdit={(account) => { setEditingAccount(account); setModal('account'); }} onDelete={deleteAccount} onDetail={openDetail} onDebt={sendDebtMessage} />;
     if (active === 'products') return <ProductsView products={products} sales={sales} purchases={purchases} quotes={quotes} orders={orders} categories={categoriesData} usdRate={dashboard.usdRate} onAdd={() => { setEditingProduct(null); setModal('product'); }} onEdit={(product) => { setEditingProduct(product); setModal('product'); }} onDelete={deleteProduct} onArchive={archiveProduct} onDetail={openProductDetail} onNotice={setNotice} onRefresh={refresh} />;
     if (active === 'categories') return <CategoriesView categories={categoriesData} onNotice={setNotice} onRefresh={refresh} />;
     if (active === 'sales') return <SalesView usdRate={dashboard.usdRate} selectedAccountId={selectedAccountId} accounts={accounts} products={activeProducts} categories={categoriesData} sales={sales} onSale={createSale} onNotice={setNotice} />;
@@ -740,9 +740,10 @@ function DashboardView({ dashboard, sales, products, accounts, onNotice }: { das
   );
 }
 
-function AccountsView({ accounts, onAdd, onEdit, onDelete, onDetail, onDebt }: { accounts: Account[]; onAdd: () => void; onEdit: (account: Account) => void; onDelete: (account: Account) => void; onDetail: (id: string) => void; onDebt: (id: string) => void }) {
+function AccountsView({ accounts, usdRate, onAdd, onEdit, onDelete, onDetail, onDebt }: { accounts: Account[]; usdRate: number; onAdd: () => void; onEdit: (account: Account) => void; onDelete: (account: Account) => void; onDetail: (id: string) => void; onDebt: (id: string) => void }) {
   const [typeFilter, setTypeFilter] = useState('Tumu');
   const [sortBy, setSortBy] = useState('last');
+  const accountUsdDisplay = (account: Account) => account.balanceDisplayUsd ?? roundMoney(Math.max(0, account.balanceUsd) + usdFromTry(Math.max(0, account.balanceTry), usdRate));
   const filtered = accounts
     .filter((account) => typeFilter === 'Tumu' || account.type === typeFilter)
     .sort((a, b) => {
@@ -764,7 +765,7 @@ function AccountsView({ accounts, onAdd, onEdit, onDelete, onDetail, onDebt }: {
         <Badge key={`${account.id}-type`}>{account.type}</Badge>,
         account.phone ?? '-',
         money(account.balanceTry),
-        money(account.balanceUsd, 'USD'),
+        money(accountUsdDisplay(account), 'USD'),
         money(account.riskLimit),
         account.lastSaleDate ? new Date(account.lastSaleDate).toLocaleDateString('tr-TR') : '-',
         account.lastCollectionDate ? new Date(account.lastCollectionDate).toLocaleDateString('tr-TR') : '-',
@@ -3744,8 +3745,10 @@ function CollectionDetailModal({ collection, account, usdRate, onClose, onNotice
   const rate = collection.exchangeRate && collection.exchangeRate > 1 ? collection.exchangeRate : usdRate;
   const tahsilatTry = collection.tlAmount ?? (collection.currency === 'TRY' ? collection.amount : tryFromUsd(collection.amount, rate));
   const tahsilatUsd = collection.usdAmount ?? (collection.currency === 'USD' ? collection.amount : usdFromTry(collection.amount, rate));
-  const remainingTry = collection.remainingTlBalance ?? account.balanceTry;
-  const remainingUsd = collection.remainingUsdBalance ?? account.balanceUsd;
+  const remainingRawTry = collection.remainingTlBalance ?? account.balanceTry;
+  const remainingRawUsd = collection.remainingUsdBalance ?? account.balanceUsd;
+  const remainingTry = remainingRawTry > 0 ? remainingRawTry : tryFromUsd(remainingRawUsd, rate);
+  const remainingUsd = remainingRawUsd > 0 ? remainingRawUsd : (remainingRawTry > 0 ? usdFromTry(remainingRawTry, rate) : 0);
   async function sendMessage() {
     try {
       const result = await apiPost<{ link: string }>(`/whatsapp/collections/${collection.id}`);

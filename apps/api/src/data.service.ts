@@ -1208,8 +1208,10 @@ export class DataService {
       exchangeRate: values.rate,
       appliedToTlBalance: values.appliedToTlBalance,
       appliedToUsdBalance: values.appliedToUsdBalance,
-      remainingTry: values.remainingTry,
-      remainingUsd: values.remainingUsd,
+      remainingTry: values.remainingDisplayTry,
+      remainingUsd: values.remainingDisplayUsd,
+      remainingRawTry: values.remainingTry,
+      remainingRawUsd: values.remainingUsd,
       description: collection.description || '',
       currency: collection.currency,
       status: collection.status ?? 'basarili',
@@ -1226,7 +1228,7 @@ export class DataService {
     const values = this.collectionDualValues(collection, account);
     const message = collection.status === 'basarisiz' || collection.status === 'beklemede'
       ? `Merhaba ${account.contactName || account.companyName},\n${date} tarihinde otomatik tahsilat islemi basarisiz olmustur.\n\nOdenmesi gereken tutar:\n${this.moneyText(values.tlAmount, 'TL')}\n${this.moneyText(values.usdAmount, 'USD')}\n\nOdeme yapmak icin:\n${collection.paymentLink}\n\nFirma`
-      : `Merhaba ${account.contactName || account.companyName},\n\n${date} tarihinde\n${this.moneyText(values.tlAmount, 'TL')} / ${this.moneyText(values.usdAmount, 'USD')} karsiligi odemeniz basariyla alinmistir.\n\nKalan bakiyeniz:\n${this.moneyText(values.remainingTry, 'TL')}\n${this.moneyText(values.remainingUsd, 'USD')}\n\nTesekkur ederiz.\nFirma`;
+      : `Merhaba ${account.contactName || account.companyName},\n\n${date} tarihinde\n${this.moneyText(values.tlAmount, 'TL')} / ${this.moneyText(values.usdAmount, 'USD')} karsiligi odemeniz basariyla alinmistir.\n\nKalan bakiyeniz:\n${this.moneyText(values.remainingDisplayTry, 'TL')}\n${this.moneyText(values.remainingDisplayUsd, 'USD')}\n\nTesekkur ederiz.\nFirma`;
     return { to: account.whatsapp, message, link: this.whatsappLink(account.whatsapp, message) };
   }
 
@@ -1758,29 +1760,29 @@ export class DataService {
     const rate = collection.exchangeRate && collection.exchangeRate > 1 ? collection.exchangeRate : this.usdRate;
     const tlAmount = this.round(collection.tlAmount ?? (collection.currency === 'TRY' ? collection.amount : collection.amount * rate));
     const usdAmount = this.round(collection.usdAmount ?? (collection.currency === 'USD' ? collection.amount : collection.amount / rate));
+    const remainingTry = this.round(collection.remainingTlBalance ?? targetAccount.balanceTry);
+    const remainingUsd = this.round(collection.remainingUsdBalance ?? targetAccount.balanceUsd);
+    const remainingDisplayTry = remainingTry > 0 ? remainingTry : this.round(remainingUsd * rate);
+    const remainingDisplayUsd = remainingUsd > 0 ? remainingUsd : (remainingTry > 0 ? this.round(remainingTry / rate) : 0);
     return {
       rate,
       tlAmount,
       usdAmount,
       appliedToTlBalance: this.round(collection.appliedToTlBalance ?? (collection.currency === 'TRY' ? collection.amount : 0)),
       appliedToUsdBalance: this.round(collection.appliedToUsdBalance ?? (collection.currency === 'USD' ? collection.amount : 0)),
-      remainingTry: this.round(collection.remainingTlBalance ?? targetAccount.balanceTry),
-      remainingUsd: this.round(collection.remainingUsdBalance ?? targetAccount.balanceUsd),
+      remainingTry,
+      remainingUsd,
+      remainingDisplayTry,
+      remainingDisplayUsd,
     };
   }
 
   private dualDisplay(tryValue: number, usdValue: number) {
     const positiveTry = Math.max(0, this.round(tryValue));
     const positiveUsd = Math.max(0, this.round(usdValue));
-    if (positiveUsd > 0) {
-      return {
-        displayTry: this.round(positiveUsd * this.usdRate),
-        displayUsd: positiveUsd,
-      };
-    }
     return {
-      displayTry: positiveTry,
-      displayUsd: positiveTry > 0 ? this.round(positiveTry / this.usdRate) : 0,
+      displayTry: this.round(positiveTry + (positiveUsd * this.usdRate)),
+      displayUsd: this.round(positiveUsd + (positiveTry > 0 ? positiveTry / this.usdRate : 0)),
     };
   }
 
