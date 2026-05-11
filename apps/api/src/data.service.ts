@@ -305,16 +305,19 @@ export class DataService {
     const purchases = this.listPurchases().filter((purchase) => purchase.supplierId === id);
     const supplierPayments = this.listSupplierPayments().filter((payment) => payment.supplierId === id);
     const ledger = [
-      ...sales.map((sale) => ({
-        id: sale.id,
-        date: sale.createdAt,
-        type: 'Satis',
-        description: `Satis fisi ${sale.id}`,
-        debitTry: sale.currency === 'TRY' ? sale.total : 0,
-        debitUsd: sale.currency === 'USD' ? sale.total : 0,
-        creditTry: 0,
-        creditUsd: 0,
-      })),
+      ...sales.map((sale) => {
+        const totals = this.saleDualTotals(sale);
+        return {
+          id: sale.id,
+          date: sale.createdAt,
+          type: 'Satis',
+          description: `Satis fisi ${sale.id}`,
+          debitTry: totals.totalTry,
+          debitUsd: totals.totalUsd,
+          creditTry: 0,
+          creditUsd: 0,
+        };
+      }),
       ...collections.map((collection) => ({
         id: collection.id,
         date: collection.createdAt,
@@ -1735,6 +1738,18 @@ export class DataService {
       totalTry,
       totalUsd,
       ...this.dualDisplay(totalTry, totalUsd),
+    };
+  }
+
+  private saleDualTotals(sale: Sale) {
+    const rate = sale.exchangeRate && sale.exchangeRate > 1 ? sale.exchangeRate : this.usdRate;
+    return {
+      totalTry: this.round(sale.totalTry ?? (sale.currency === 'TRY' ? sale.total : sale.total * rate)),
+      totalUsd: this.round(sale.totalUsd ?? (sale.currency === 'USD' ? sale.total : sale.total / rate)),
+      paidTry: this.round(sale.paidTry ?? (sale.currency === 'TRY' ? sale.paid : sale.paid * rate)),
+      paidUsd: this.round(sale.paidUsd ?? (sale.currency === 'USD' ? sale.paid : sale.paid / rate)),
+      remainingTry: this.round(sale.remainingTry ?? (sale.currency === 'TRY' ? sale.remaining : sale.remaining * rate)),
+      remainingUsd: this.round(sale.remainingUsd ?? (sale.currency === 'USD' ? sale.remaining : sale.remaining / rate)),
     };
   }
 

@@ -3956,6 +3956,38 @@ function SaleDetailModal({ sale, products, accounts, fallbackRate, onClose, onNo
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
     onNotice(`WhatsApp mesaji PDF linkiyle hazirlandi: ${pdfLink.fileName}`);
   }
+  function openWhatsappWithReceiptPdf() {
+    const phone = normalizeWhatsappPhone(account?.whatsapp ?? account?.phone);
+    if (!phone) {
+      onNotice('Cari telefon numarasi bulunamadi');
+      return;
+    }
+    try {
+      const document = buildSaleDocument('receipt');
+      const pdfLink = createPreviewDocument(document.fileName, document.html);
+      const message = `Sayin ${accountName},
+
+Satis fisiniz hazir.
+Fis no: ${sale.id}
+
+Toplam:
+${money(totalTry)}
+${money(totalUsd, 'USD')}
+
+Kalan bakiye:
+${money(remainingTry)}
+${money(remainingUsd, 'USD')}
+
+PDF: ${pdfLink.url}
+
+Iyi calismalar.`;
+      window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
+      onNotice(`WhatsApp mesaji PDF linkiyle hazirlandi: ${pdfLink.fileName}`);
+    } catch (error) {
+      console.error('Satis PDF olusturulamadi', error);
+      onNotice('Satis PDF olusturulamadi');
+    }
+  }
   return (
     <ModalFrame title={`Satis detayi - ${sale.id}`} onClose={onClose}>
       <div className="space-y-4">
@@ -3986,7 +4018,7 @@ function SaleDetailModal({ sale, products, accounts, fallbackRate, onClose, onNo
           <Button variant="soft" onClick={() => setEditOpen(true)} icon={<Edit3 size={17} />}>Duzenle</Button>
           <Button variant="soft" onClick={openSalePdfPreview} icon={<FileDown size={17} />}>PDF fis olustur</Button>
           <Button variant="soft" onClick={openSaleInfoNotePdf} icon={<FileDown size={17} />}>Satis bilgi notu PDF</Button>
-          <Button onClick={openWhatsappWithPdf} icon={<MessageCircle size={17} />}>WhatsApp gonder</Button>
+          <Button onClick={openWhatsappWithReceiptPdf} icon={<MessageCircle size={17} />}>WhatsApp gonder</Button>
         </div>
         {editOpen && <SaleEditModal sale={sale} products={products} accounts={accounts} fallbackRate={fallbackRate} onClose={() => setEditOpen(false)} onNotice={onNotice} onSaved={async (updated) => { await onUpdated?.(updated); setEditOpen(false); }} />}
       </div>
