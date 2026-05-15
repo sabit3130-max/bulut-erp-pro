@@ -31,7 +31,7 @@ import {
   WalletCards,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Account, AccountDetail, apiDelete, apiGet, apiHealthCheck, apiPost, apiPut, apiUrl, Category, Collection, Dashboard, MessageTemplate, Order, PaymentLog, PdfTemplate, Product, Purchase, Quote, Sale, SupplierPayment, TransactionItem, UserSession } from './api';
 
@@ -106,10 +106,67 @@ function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+function normalizeSearch(value?: string | number) {
+  return String(value ?? '')
+    .trim()
+    .toLocaleLowerCase('tr-TR')
+    .replace(/ı/g, 'i')
+    .replace(/ğ/g, 'g')
+    .replace(/ü/g, 'u')
+    .replace(/ş/g, 's')
+    .replace(/ö/g, 'o')
+    .replace(/ç/g, 'c')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
 function productItemMatches(item: TransactionItem, product: Product) {
   const values = [item.productId, item.productName].filter(Boolean).map((value) => String(value).trim().toLocaleLowerCase('tr-TR'));
   const productValues = [product.id, product.name, product.code, product.barcode].filter(Boolean).map((value) => String(value).trim().toLocaleLowerCase('tr-TR'));
   return values.some((value) => productValues.includes(value));
+}
+
+function categoryDescendants(categories: Category[], categoryName: string) {
+  const selected = categories.find((item) => item.name === categoryName);
+  if (!selected) return new Set([categoryName]);
+  const names = new Set<string>([selected.name]);
+  const visit = (parentId: string) => {
+    categories.filter((item) => item.parentId === parentId).forEach((child) => {
+      names.add(child.name);
+      visit(child.id);
+    });
+  };
+  visit(selected.id);
+  return names;
+}
+
+function productInCategoryTree(product: Product, categories: Category[], categoryName: string) {
+  if (categoryName === 'Tumu') return true;
+  const names = categoryDescendants(categories, categoryName);
+  return names.has(product.category) || Boolean(product.subCategory && names.has(product.subCategory));
+}
+
+function hierarchicalCategories(categories: Category[]) {
+  const result: Array<Category & { depth: number }> = [];
+  const byParent = new Map<string, Category[]>();
+  categories.forEach((category) => {
+    const key = category.parentId || '';
+    byParent.set(key, [...(byParent.get(key) ?? []), category]);
+  });
+  const sort = (items: Category[]) => [...items].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name, 'tr'));
+  const visit = (parentId: string, depth: number) => {
+    sort(byParent.get(parentId) ?? []).forEach((category) => {
+      result.push({ ...category, depth });
+      visit(category.id, depth + 1);
+    });
+  };
+  visit('', 0);
+  categories.filter((category) => category.parentId && !categories.some((parent) => parent.id === category.parentId) && !result.some((item) => item.id === category.id)).forEach((category) => result.push({ ...category, depth: 0 }));
+  return result;
+}
+
+function categoryOptions(categories: Category[]) {
+  return hierarchicalCategories(categories).map((item) => ({ label: `${'\u00a0\u00a0'.repeat(item.depth)}${item.depth ? '└─ ' : ''}${item.name}`, value: item.name }));
 }
 
 function grossFromNet(value: number, vatRate: number) {
@@ -245,24 +302,62 @@ export function App() {
         storedUser = null;
       }
       const userData = storedUser?.role === 'ADMIN' ? await apiGet<UserSession[]>('/users') : [];
+      const snapshot = { dashboardData, accountData, productData, saleData, collectionData, purchaseData, supplierPaymentData, quoteData, orderData, logData, categoryData, pdfData, messageData, userData };
+      localStorage.setItem('erp_last_snapshot', JSON.stringify(snapshot));
       setApiError('');
-      setDashboard(dashboardData);
-      setAccounts(accountData);
-      setProducts(productData);
-      setSales(saleData);
-      setCollections(collectionData);
-      setPaymentLogs(logData);
-      setPurchases(purchaseData);
-      setSupplierPayments(supplierPaymentData);
-      setQuotes(quoteData);
-      setOrders(orderData);
-      setCategoriesData(categoryData);
-      setPdfTemplates(pdfData);
-      setMessageTemplates(messageData);
-      setUsers(userData);
+      applySnapshot(snapshot);
+    } catch (error) {
+      console.error('API baglantisi kurulamadı', error);
+      const cached = readCachedSnapshot();
+      if (cached) {
+        applySnapshot(cached);
+        setApiError('API baglantisi kurulamadı. Son basarili veriler gosteriliyor.');
+        setNotice('API baglantisi kurulamadı. Son basarili veriler gosteriliyor.');
+        return;
+      }
+      const message = errorMessage(error);
+      setApiError(message);
+      setNotice(message);
+    }
+  }
+
+  function applySnapshot(snapshot: {
+    dashboardData: Dashboard;
+    accountData: Account[];
+    productData: Product[];
+    saleData: Sale[];
+    collectionData: Collection[];
+    purchaseData: Purchase[];
+    supplierPaymentData: SupplierPayment[];
+    quoteData: Quote[];
+    orderData: Order[];
+    logData: PaymentLog[];
+    categoryData: Category[];
+    pdfData: PdfTemplate[];
+    messageData: MessageTemplate[];
+    userData?: UserSession[];
+  }) {
+    setDashboard(snapshot.dashboardData);
+    setAccounts(snapshot.accountData);
+    setProducts(snapshot.productData);
+    setSales(snapshot.saleData);
+    setCollections(snapshot.collectionData);
+    setPaymentLogs(snapshot.logData);
+    setPurchases(snapshot.purchaseData);
+    setSupplierPayments(snapshot.supplierPaymentData);
+    setQuotes(snapshot.quoteData);
+    setOrders(snapshot.orderData);
+    setCategoriesData(snapshot.categoryData);
+    setPdfTemplates(snapshot.pdfData);
+    setMessageTemplates(snapshot.messageData);
+    setUsers(snapshot.userData ?? []);
+  }
+
+  function readCachedSnapshot() {
+    try {
+      return JSON.parse(localStorage.getItem('erp_last_snapshot') ?? 'null') as Parameters<typeof applySnapshot>[0] | null;
     } catch {
-      setApiError('API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
-      setNotice('API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
+      return null;
     }
   }
 
@@ -305,7 +400,7 @@ export function App() {
     }
   }
 
-  async function createAccount(payload: Partial<Account>) {
+  async function createAccount(payload: Partial<Account> & { autoCode?: boolean }) {
     try {
       if (editingAccount) await apiPut<Account>(`/accounts/${editingAccount.id}`, payload);
       else await apiPost<Account>('/accounts', payload);
@@ -503,7 +598,7 @@ export function App() {
   }
 
   const content = useMemo(() => {
-    if (!dashboard) return <div className="rounded-2xl border border-line bg-white p-8 text-sm font-semibold text-rose dark:border-slate-700 dark:bg-[#17202a]">{apiError || 'Yukleniyor...'}</div>;
+    if (!dashboard) return <div className="rounded-2xl border border-line bg-white p-8 text-sm font-semibold text-rose dark:border-slate-700 dark:bg-[#17202a]">{uiText(apiError || 'Yukleniyor...')}</div>;
     const activeProducts = products.filter((product) => product.active !== false);
     if (currentUser?.role === 'CUSTOMER' || currentUser?.role === 'DEALER') return <DealerView usdRate={dashboard.usdRate} products={activeProducts} accounts={accounts} orders={orders} initialSession={currentUser} onNotice={setNotice} onRefresh={refresh} />;
     if (detail) return <AccountDetailPage usdRate={dashboard.usdRate} detail={detail} products={products} accounts={accounts} users={users} onCreateUser={createUserForAccount} onBack={() => { setDetail(null); window.history.pushState({}, '', '/'); }} onSale={startAccountSale} onCollection={startAccountCollection} onPurchase={startAccountPurchase} onSupplierPayment={createSupplierPaymentFromDetail} onDebt={sendDebtMessage} onNotice={setNotice} onReload={async () => { await refresh(); setDetail(await apiGet<AccountDetail>(`/accounts/${detail.account.id}`)); }} />;
@@ -512,7 +607,7 @@ export function App() {
     if (active === 'accounts') return <AccountsView accounts={accounts} usdRate={dashboard.usdRate} onAdd={() => { setEditingAccount(null); setModal('account'); }} onEdit={(account) => { setEditingAccount(account); setModal('account'); }} onDelete={deleteAccount} onDetail={openDetail} onDebt={sendDebtMessage} />;
     if (active === 'products') return <ProductsView products={products} sales={sales} purchases={purchases} quotes={quotes} orders={orders} categories={categoriesData} usdRate={dashboard.usdRate} onAdd={() => { setEditingProduct(null); setModal('product'); }} onEdit={(product) => { setEditingProduct(product); setModal('product'); }} onDelete={deleteProduct} onArchive={archiveProduct} onDetail={openProductDetail} onNotice={setNotice} onRefresh={refresh} />;
     if (active === 'categories') return <CategoriesView categories={categoriesData} onNotice={setNotice} onRefresh={refresh} />;
-    if (active === 'sales') return <SalesView usdRate={dashboard.usdRate} selectedAccountId={selectedAccountId} accounts={accounts} products={activeProducts} categories={categoriesData} sales={sales} onSale={createSale} onNotice={setNotice} />;
+    if (active === 'sales') return <SalesView usdRate={dashboard.usdRate} selectedAccountId={selectedAccountId} accounts={accounts} products={activeProducts} categories={categoriesData} sales={sales} onSale={createSale} onNotice={setNotice} onRefresh={refresh} />;
     if (active === 'collections') return <CollectionsView usdRate={dashboard.usdRate} selectedAccountId={selectedAccountId} accounts={accounts} collections={collections} paymentLogs={paymentLogs} onCollection={createCollection} onNotice={setNotice} onRefresh={refresh} />;
     if (active === 'purchases') return <PurchasesView usdRate={dashboard.usdRate} accounts={accounts} products={activeProducts} purchases={purchases} supplierPayments={supplierPayments} onNotice={setNotice} onRefresh={refresh} />;
     if (active === 'dealer') return <DealerView usdRate={dashboard.usdRate} products={activeProducts} accounts={accounts} orders={orders} initialSession={currentUser?.role === 'ADMIN' ? currentUser : null} onNotice={setNotice} onRefresh={refresh} />;
@@ -576,7 +671,7 @@ export function App() {
             return (
               <button
                 key={tab.id}
-                title={tab.label}
+                title={uiText(tab.label)}
                 onClick={() => activateTab(tab.id)}
                 className={`group relative flex h-11 w-full items-center gap-3 rounded px-3 text-left text-sm font-medium transition-all duration-300 ease-out hover:-translate-y-0.5 hover:shadow-sm ${
                   active === tab.id ? 'bg-gradient-to-r from-ocean/95 to-ocean/75 text-white shadow-lg shadow-ocean/10' : 'text-slate-600 hover:bg-white/80 dark:text-slate-300 dark:hover:bg-slate-800/80'
@@ -584,7 +679,7 @@ export function App() {
               >
                 <span className={`absolute left-0 top-2 h-7 w-1 rounded-r-full bg-mint transition-all duration-300 ${active === tab.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-80'}`} />
                 <Icon size={19} className="shrink-0" strokeWidth={1.8} />
-                <span className={sidebarCollapsed ? 'hidden' : ''}>{tab.label}</span>
+                <span className={sidebarCollapsed ? 'hidden' : ''}>{uiText(tab.label)}</span>
                 {!sidebarCollapsed && <ChevronRight size={15} className="ml-auto opacity-0 transition group-hover:opacity-100" />}
               </button>
             );
@@ -641,7 +736,7 @@ export function App() {
                   return (
                     <button key={tab.id} onClick={() => activateTab(tab.id)} className={`group flex min-h-11 w-full items-center gap-3 rounded px-3 py-3 text-left text-sm font-semibold transition-all duration-300 ease-out hover:-translate-y-0.5 hover:shadow-sm ${active === tab.id ? 'bg-ocean text-white shadow-sm' : 'bg-white/60 text-slate-700 hover:bg-white dark:bg-slate-900/60 dark:text-slate-200 dark:hover:bg-slate-800'}`}>
                       <Icon size={19} />
-                      <span>{tab.label}</span>
+                      <span>{uiText(tab.label)}</span>
                       <ChevronRight size={16} className="ml-auto opacity-50 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
                     </button>
                   );
@@ -653,7 +748,7 @@ export function App() {
 
         <main className="px-4 py-6 sm:px-6 lg:px-8">
           <div className="mb-5 rounded-2xl border border-white/70 bg-white/80 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft backdrop-blur dark:border-slate-700/70 dark:bg-[#17202a]/80 dark:text-slate-200">
-            {notice}
+            {uiText(notice)}
           </div>
           {content}
           {dashboard && <div className="mt-4 text-xs text-slate-500 dark:text-slate-400">Kur son guncelleme: {new Date(dashboard.usdRateUpdatedAt).toLocaleString('tr-TR')}</div>}
@@ -695,7 +790,7 @@ function DashboardView({ dashboard, sales, products, accounts, onNotice }: { das
         {stats.map(([label, tryValue, usdValue, Icon, tone]) => (
           <div key={label} className="rounded-2xl border border-white/80 bg-white/90 p-5 shadow-soft backdrop-blur transition-all duration-200 hover:-translate-y-1 hover:shadow-lift dark:border-slate-700/70 dark:bg-[#17202a]/90">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{label}</span>
+              <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{uiText(label)}</span>
               <span className={`grid h-10 w-10 place-items-center rounded-2xl ${tone}`}><Icon size={19} /></span>
             </div>
             <div className="mt-3"><DualMoney tryValue={tryValue} usdValue={usdValue} /></div>
@@ -743,9 +838,24 @@ function DashboardView({ dashboard, sales, products, accounts, onNotice }: { das
 function AccountsView({ accounts, usdRate, onAdd, onEdit, onDelete, onDetail, onDebt }: { accounts: Account[]; usdRate: number; onAdd: () => void; onEdit: (account: Account) => void; onDelete: (account: Account) => void; onDetail: (id: string) => void; onDebt: (id: string) => void }) {
   const [typeFilter, setTypeFilter] = useState('Tumu');
   const [sortBy, setSortBy] = useState('last');
+  const [query, setQuery] = useState('');
+  const normalizedQuery = normalizeSearch(query);
   const accountUsdDisplay = (account: Account) => account.balanceDisplayUsd ?? roundMoney(Math.max(0, account.balanceUsd) + usdFromTry(Math.max(0, account.balanceTry), usdRate));
   const filtered = accounts
     .filter((account) => typeFilter === 'Tumu' || account.type === typeFilter)
+    .filter((account) => {
+      if (!normalizedQuery) return true;
+      return [
+        account.companyName,
+        account.code,
+        account.phone,
+        account.whatsapp,
+        account.email,
+        account.contactName,
+        account.taxNumber,
+        account.taxOffice,
+      ].some((value) => normalizeSearch(value).includes(normalizedQuery));
+    })
     .sort((a, b) => {
       if (sortBy === 'debtDesc') return (b.balanceTry + b.balanceUsd) - (a.balanceTry + a.balanceUsd);
       if (sortBy === 'debtAsc') return (a.balanceTry + a.balanceUsd) - (b.balanceTry + b.balanceUsd);
@@ -757,7 +867,7 @@ function AccountsView({ accounts, usdRate, onAdd, onEdit, onDelete, onDetail, on
   return (
     <DataTable
       title="Cari hesaplar"
-      actions={<Toolbar><FormSelect label="" value={typeFilter} onChange={setTypeFilter} options={['Tumu', 'MUSTERI', 'BAYI', 'TEDARIKCI'].map((item) => ({ label: item, value: item }))} /><FormSelect label="" value={sortBy} onChange={setSortBy} options={[{ label: 'Son islem', value: 'last' }, { label: 'Borc buyukten', value: 'debtDesc' }, { label: 'Borc kucukten', value: 'debtAsc' }, { label: 'Alacak buyukten', value: 'receivableDesc' }, { label: 'Ada gore A-Z', value: 'az' }, { label: 'Ada gore Z-A', value: 'za' }]} /><Button onClick={onAdd} icon={<Plus size={17} />}>Cari ekle</Button><a className="inline-flex h-10 items-center gap-2 rounded border border-line px-3 text-sm font-semibold dark:border-slate-700" href={apiUrl('/exports/accounts.xlsx')}><FileDown size={17} /> Excel</a></Toolbar>}
+      actions={<Toolbar><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Firma, yetkili, telefon, vergi no ara" className="h-10 w-72 rounded-xl border border-line bg-white/90 px-3 text-sm outline-none transition focus:border-ocean focus:ring-4 focus:ring-ocean/10 dark:border-slate-700 dark:bg-slate-900/80" /><FormSelect label="" value={typeFilter} onChange={setTypeFilter} options={['Tumu', 'MUSTERI', 'BAYI', 'TEDARIKCI'].map((item) => ({ label: item, value: item }))} /><FormSelect label="" value={sortBy} onChange={setSortBy} options={[{ label: 'Son islem', value: 'last' }, { label: 'Borc buyukten', value: 'debtDesc' }, { label: 'Borc kucukten', value: 'debtAsc' }, { label: 'Alacak buyukten', value: 'receivableDesc' }, { label: 'Ada gore A-Z', value: 'az' }, { label: 'Ada gore Z-A', value: 'za' }]} /><Button onClick={onAdd} icon={<Plus size={17} />}>Cari ekle</Button><a className="inline-flex h-10 items-center gap-2 rounded border border-line px-3 text-sm font-semibold dark:border-slate-700" href={apiUrl('/exports/accounts.xlsx')}><FileDown size={17} /> Excel</a></Toolbar>}
       headers={['Kod', 'Firma', 'Tip', 'Telefon', 'TL', 'USD', 'Risk', 'Son satis', 'Son tahsilat', 'Islem']}
       rows={filtered.map((account) => [
         account.code,
@@ -793,7 +903,7 @@ function ProductsView({ products, sales, purchases, quotes, orders, categories, 
   };
   const filtered = products
     .filter((product) => statusFilter === 'all' || (statusFilter === 'active' ? product.active !== false : product.active === false))
-    .filter((product) => categoryFilter === 'Tumu' || product.category === categoryFilter || product.subCategory === categoryFilter);
+    .filter((product) => productInCategoryTree(product, categories, categoryFilter));
   const productHeaders = ['Urun adi', 'Urun kodu', 'Barkod', 'Kategori', 'Alt kategori', 'Marka', 'Depo', 'Stok adedi', 'Alis fiyat TL', 'Alis fiyat USD', 'Satis fiyat TL', 'Satis fiyat USD', 'Bayi fiyat TL', 'Bayi fiyat USD', 'KDV orani', 'Kritik stok limiti', 'Urun gorsel URL', 'Aktif'];
   const templateRow = { 'Urun adi': '', 'Urun kodu': '', Barkod: '', Kategori: '', 'Alt kategori': '', Marka: '', Depo: 'Merkez Depo', 'Stok adedi': '', 'Alis fiyat TL': '', 'Alis fiyat USD': '', 'Satis fiyat TL': '', 'Satis fiyat USD': '', 'Bayi fiyat TL': '', 'Bayi fiyat USD': '', 'KDV orani': '20', 'Kritik stok limiti': '5', 'Urun gorsel URL': '', Aktif: 'Evet' };
   const exportRows = filtered.map((product) => ({
@@ -953,7 +1063,7 @@ function ProductInventoryTable({ products, categories, statusFilter, categoryFil
         <div className="flex flex-wrap items-center gap-2">
           <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-11 w-52 rounded-xl border border-line bg-white/90 px-3 text-sm outline-none transition focus:border-ocean focus:ring-4 focus:ring-ocean/10 dark:border-slate-700 dark:bg-slate-900/80" placeholder="Tabloda ara" />
           <FormSelect label="" value={statusFilter} onChange={(value) => setStatusFilter(value as 'active' | 'passive' | 'all')} options={[{ label: 'Aktif urunler', value: 'active' }, { label: 'Pasif urunler', value: 'passive' }, { label: 'Tumu', value: 'all' }]} />
-          <FormSelect label="" value={categoryFilter} onChange={setCategoryFilter} options={[{ label: 'Tum kategoriler', value: 'Tumu' }, ...categories.map((item) => ({ label: item.name, value: item.name }))]} />
+          <FormSelect label="" value={categoryFilter} onChange={setCategoryFilter} options={[{ label: 'Tum kategoriler', value: 'Tumu' }, ...categoryOptions(categories)]} />
           <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-line bg-white/90 px-3 text-sm font-semibold text-ocean shadow-sm transition hover:-translate-y-0.5 hover:bg-mint dark:border-slate-700 dark:bg-slate-900/80">
             <Upload size={16} /> Içe aktar
             <input type="file" accept=".csv,.txt,.tsv,.xls" className="hidden" onChange={(event) => void onImport(event.target.files?.[0])} />
@@ -1140,7 +1250,7 @@ function ProductDetailPage({ productId, usdRate, products, accounts, sales, purc
         <DataTable title="Onceki alislar" headers={['Tarih', 'Tedarikci', 'Fatura no', 'Miktar', 'Alis USD/TL', 'Toplam USD/TL', 'Odeme', 'Detay']} rows={productPurchases.flatMap((purchase) => (purchase.items ?? []).filter(matchesProduct).map((item) => [new Date(purchase.createdAt).toLocaleDateString('tr-TR'), purchase.supplierName ?? accounts.find((account) => account.id === purchase.supplierId)?.companyName ?? purchase.supplierId, purchase.invoiceNo ?? '-', item.quantity, <DualMoney key={`${purchase.id}-unit`} compact tryValue={item.unitPriceTry ?? 0} usdValue={item.unitPriceUsd ?? 0} />, <DualMoney key={`${purchase.id}-total`} compact tryValue={item.lineTotalTry ?? 0} usdValue={item.lineTotalUsd ?? 0} />, purchase.paymentStatus ?? '-', <Button key={`${purchase.id}-detail`} variant="soft" onClick={() => setSelectedPurchase(purchase)}>Detay</Button>]))} />
       </div>
       <DataTable title="Stok ekstresi ve hareketler" headers={['Tarih', 'Islem tipi', 'Aciklama', 'Depo', 'Giris', 'Cikis', 'Kalan', 'Kullanici']} rows={movements.map((movement) => [new Date(movement.date).toLocaleDateString('tr-TR'), movement.type, movement.description, movement.warehouse, movement.inQty || '-', movement.outQty || '-', movement.remaining, movement.user])} />
-      {selectedSale && <SaleDetailModal sale={selectedSale} products={products} accounts={accounts} fallbackRate={usdRate} onClose={() => setSelectedSale(null)} onNotice={onNotice} />}
+      {selectedSale && <SaleDetailModal sale={selectedSale} products={products} accounts={accounts} fallbackRate={usdRate} onClose={() => setSelectedSale(null)} onNotice={onNotice} onUpdated={setSelectedSale} />}
       {selectedPurchase && <PurchaseDetailModal purchase={selectedPurchase} products={products} accounts={accounts} fallbackRate={usdRate} onClose={() => setSelectedPurchase(null)} onNotice={onNotice} onSaved={setSelectedPurchase} />}
       {deleteOpen && (
         <ModalFrame title={hasMovements ? 'Urun arsivleme' : 'Urun silme onayi'} onClose={() => setDeleteOpen(false)}>
@@ -1381,6 +1491,8 @@ function CategoriesView({ categories, onNotice, onRefresh }: { categories: Categ
   const [form, setForm] = useState<Partial<Category>>(empty);
   const [editingId, setEditingId] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const rows = hierarchicalCategories(categories);
+  const hasChildren = (category: Category) => categories.some((item) => item.parentId === category.id);
   function openCreate() {
     setEditingId('');
     setForm(empty);
@@ -1415,9 +1527,13 @@ function CategoriesView({ categories, onNotice, onRefresh }: { categories: Categ
   async function toggle(category: Category) {
     await apiPut(`/categories/${category.id}`, { active: !category.active });
     await onRefresh();
-    onNotice('Kategori guncellendi');
+    onNotice(hasChildren(category) ? 'Kategori guncellendi. Alt kategoriler etkilenmedi.' : 'Kategori guncellendi');
   }
   async function remove(category: Category) {
+    if (hasChildren(category)) {
+      onNotice('Bu kategorinin alt kategorileri var. Once alt kategorileri tasiyin veya pasife alin.');
+      return;
+    }
     try {
       await apiDelete(`/categories/${category.id}`);
       await onRefresh();
@@ -1430,8 +1546,11 @@ function CategoriesView({ categories, onNotice, onRefresh }: { categories: Categ
         title="Kategori yonetimi"
         actions={<Button onClick={openCreate} icon={<Plus size={17} />}>Yeni kategori</Button>}
         headers={['Kategori adi', 'Ust kategori', 'Urun sayisi', 'Durum', 'Islem']}
-        rows={categories.map((category) => [
-          <div key={`${category.id}-name`}><div className="font-bold text-ink dark:text-white">{category.name}</div>{category.description && <div className="mt-1 line-clamp-2 text-xs text-slate-500">{category.description}</div>}</div>,
+        rows={rows.map((category) => [
+          <div key={`${category.id}-name`} className="flex items-start gap-2">
+            <span className="mt-0.5 select-none font-mono text-slate-400">{category.depth ? `${'\u00a0\u00a0'.repeat(Math.max(0, category.depth - 1))}└─` : ''}</span>
+            <div><div className="font-bold text-ink dark:text-white">{category.name}</div>{category.description && <div className="mt-1 line-clamp-2 text-xs text-slate-500">{category.description}</div>}{hasChildren(category) && <div className="mt-1 text-xs font-semibold text-ocean">Alt kategoriler: {categories.filter((item) => item.parentId === category.id).map((item) => item.name).join(', ')}</div>}</div>
+          </div>,
           categories.find((item) => item.id === category.parentId)?.name ?? '-',
           <span key={`${category.id}-count`} className="font-bold">{category.productCount ?? 0}</span>,
           <Badge key={`${category.id}-status`}>{category.active ? 'Aktif' : 'Pasif'}</Badge>,
@@ -1448,7 +1567,7 @@ function CategoriesView({ categories, onNotice, onRefresh }: { categories: Categ
           <div className="space-y-4">
             <FormGrid>
               <FormInput label="Kategori adi" value={form.name} onChange={(name) => setForm({ ...form, name })} />
-              <FormSelect label="Ust kategori" value={form.parentId ?? ''} onChange={(parentId) => setForm({ ...form, parentId })} options={[{ label: 'Ana kategori', value: '' }, ...categories.filter((item) => item.id !== editingId).map((item) => ({ label: item.name, value: item.id }))]} />
+              <FormSelect label="Ust kategori" value={form.parentId ?? ''} onChange={(parentId) => setForm({ ...form, parentId })} options={[{ label: 'Ana kategori', value: '' }, ...hierarchicalCategories(categories).filter((item) => item.id !== editingId).map((item) => ({ label: `${'\u00a0\u00a0'.repeat(item.depth)}${item.depth ? '└─ ' : ''}${item.name}`, value: item.id }))]} />
               <FormInput label="Aciklama" value={form.description} onChange={(description) => setForm({ ...form, description })} />
               <label className="mt-6 flex items-center gap-2 text-sm font-semibold text-slate-600 dark:text-slate-300"><input type="checkbox" checked={form.active ?? true} onChange={(event) => setForm({ ...form, active: event.target.checked })} /> Aktif</label>
             </FormGrid>
@@ -1656,12 +1775,33 @@ function QuotesView({ usdRate, quotes, accounts, products, pdfTemplates, onNotic
     const fileName = `teklif-${quote.quoteNo ?? quote.id}.pdf`;
     const columns = settings.columns?.length ? settings.columns : ['Urun', 'Adet', 'Birim USD/TL', 'Iskonto', 'KDV', 'Toplam USD/TL'];
     const logoHtml = template?.logoUrl ? `<img src="${escapeHtml(template.logoUrl)}" style="max-width:${settings.logoSize}px;max-height:${settings.logoSize}px;object-fit:contain">` : `<div class="logo-mark">${escapeHtml((settings.companyName ?? 'B').slice(0, 1))}</div>`;
-    const html = `<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>${escapeHtml(fileName)}</title><style>@page{size:${settings.paperType ?? 'A4'};margin:${settings.marginMm ?? 14}mm}body{font-family:${escapeHtml(template?.fontFamily ?? 'Inter')},Arial,sans-serif;color:${settings.textColor};font-size:${settings.bodySize}px;line-height:${settings.lineHeight}}.top{display:flex;justify-content:space-between;gap:18px;border-bottom:3px solid ${settings.headerColor};padding-bottom:16px}.brand{font-size:${settings.titleSize}px;font-weight:900;color:${settings.headerColor}}.logo-wrap{text-align:${settings.logoAlign}}.logo-mark{display:grid;place-items:center;width:${settings.logoSize}px;height:${settings.logoSize}px;border-radius:14px;background:${settings.headerColor};color:white;font-size:28px;font-weight:900}.box{border:1px solid ${settings.tableBorderColor};border-radius:10px;padding:12px;margin:14px 0}table{width:100%;border-collapse:collapse;font-size:${settings.bodySize}px}th{background:${settings.tableHeaderColor};color:${settings.headerColor}}th,td{border:1px solid ${settings.tableBorderColor};padding:9px;text-align:left}.totals{width:340px;margin-left:auto}.totals div{display:flex;justify-content:space-between;border-bottom:1px solid ${settings.tableBorderColor};padding:8px 0}.sign{height:92px;border:1px dashed #94a3b8;border-radius:10px;padding:10px;color:#64748b}.footer{margin-top:28px;border-top:2px solid ${settings.headerColor};padding-top:12px;color:#64748b}.qr{width:72px;height:72px;border:8px solid ${settings.headerColor};border-radius:8px}</style></head><body><div class="top"><div><div class="logo-wrap">${logoHtml}</div><div class="brand">${escapeHtml(settings.companyName ?? template?.title ?? 'Bulut ERP Pro')}</div><div>${escapeHtml(settings.subtitle ?? template?.title ?? 'Teklif Formu')}</div><div>${escapeHtml(settings.contactInfo ?? '')}</div></div><div><b>${escapeHtml(template?.title ?? 'Teklif')}:</b> ${escapeHtml(quote.quoteNo ?? quote.id)}<br><b>Tarih:</b> ${escapeHtml(new Date(quote.createdAt).toLocaleDateString('tr-TR'))}${settings.showQr ? '<div class="qr"></div>' : ''}</div></div><div class="box"><b>Musteri:</b> ${escapeHtml(accounts.find((a) => a.id === quote.accountId)?.companyName ?? quote.accountName ?? quote.accountId)}<br><b>Vade:</b> ${escapeHtml(new Date(quote.validUntil).toLocaleDateString('tr-TR'))}<br><b>Kur:</b> ${escapeHtml(quote.exchangeRate ?? usdRate)}</div><table><thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join('')}</tr></thead><tbody>${rowHtml}</tbody></table><div class="totals"><div><span>Ara toplam</span><span>${escapeHtml(money(totals.subtotalUsd, 'USD'))} / ${escapeHtml(money(totals.subtotalTry))}</span></div><div><span>Iskonto</span><span>${escapeHtml(money(totals.discountUsd, 'USD'))} / ${escapeHtml(money(totals.discountTry))}</span></div><div><span>KDV</span><span>${escapeHtml(money(totals.vatUsd, 'USD'))} / ${escapeHtml(money(totals.vatTry))}</span></div><div><b>Genel toplam</b><b>${escapeHtml(money(totals.totalUsd, 'USD'))} / ${escapeHtml(money(totals.totalTry))}</b></div></div><div class="box"><b>Aciklama</b><br>${escapeHtml(quote.note ?? '-')}</div>${settings.showBankInfo ? `<div class="box"><b>Banka bilgileri</b><br>${escapeHtml(settings.bankInfo ?? '')}</div>` : ''}<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:28px">${settings.showSignature ? '<div class="sign">Imza alani</div>' : ''}${settings.showStamp ? '<div class="sign">Kase alani</div>' : ''}</div><div class="footer">${escapeHtml(settings.footerText ?? template?.footer ?? '')}${settings.showWhatsapp ? `<br>WhatsApp: ${escapeHtml(settings.whatsapp ?? '')}` : ''}</div><script>window.addEventListener('load',()=>setTimeout(()=>window.print(),250));</script></body></html>`;
+    const customer = accounts.find((a) => a.id === quote.accountId);
+    const customerInfo = `<b>Müşteri:</b> ${escapeHtml(customer?.companyName ?? quote.accountName ?? quote.accountId)}<br><b>Adres:</b> ${escapeHtml([customer?.address, customer?.district, customer?.city].filter(Boolean).join(' / ') || '-')}<br><b>Vergi dairesi:</b> ${escapeHtml(customer?.taxOffice ?? '-')}<br><b>Vergi numarası:</b> ${escapeHtml(customer?.taxNumber ?? '-')}<br><b>Vade:</b> ${escapeHtml(new Date(quote.validUntil).toLocaleDateString('tr-TR'))}<br><b>Kur:</b> ${escapeHtml(quote.exchangeRate ?? usdRate)}`;
+    const html = `<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>${escapeHtml(fileName)}</title><style>@page{size:${settings.paperType ?? 'A4'};margin:${settings.marginMm ?? 14}mm}body{font-family:${escapeHtml(template?.fontFamily ?? 'Inter')},Arial,sans-serif;color:${settings.textColor};font-size:${settings.bodySize}px;line-height:${settings.lineHeight}}.top{display:flex;justify-content:space-between;gap:18px;border-bottom:3px solid ${settings.headerColor};padding-bottom:16px}.brand{font-size:${settings.titleSize}px;font-weight:900;color:${settings.headerColor}}.logo-wrap{text-align:${settings.logoAlign}}.logo-mark{display:grid;place-items:center;width:${settings.logoSize}px;height:${settings.logoSize}px;border-radius:14px;background:${settings.headerColor};color:white;font-size:28px;font-weight:900}.box{border:1px solid ${settings.tableBorderColor};border-radius:10px;padding:12px;margin:14px 0}table{width:100%;border-collapse:collapse;font-size:${settings.bodySize}px}th{background:${settings.tableHeaderColor};color:${settings.headerColor}}th,td{border:1px solid ${settings.tableBorderColor};padding:9px;text-align:left}.totals{width:340px;margin-left:auto}.totals div{display:flex;justify-content:space-between;border-bottom:1px solid ${settings.tableBorderColor};padding:8px 0}.sign{height:92px;border:1px dashed #94a3b8;border-radius:10px;padding:10px;color:#64748b}.footer{margin-top:28px;border-top:2px solid ${settings.headerColor};padding-top:12px;color:#64748b}.qr{width:72px;height:72px;border:8px solid ${settings.headerColor};border-radius:8px}</style></head><body><div class="top"><div><div class="logo-wrap">${logoHtml}</div><div class="brand">${escapeHtml(settings.companyName ?? template?.title ?? 'Bulut ERP Pro')}</div><div>${escapeHtml(settings.subtitle ?? template?.title ?? 'Teklif Formu')}</div><div>${escapeHtml(settings.contactInfo ?? '')}</div></div><div><b>${escapeHtml(template?.title ?? 'Teklif')}:</b> ${escapeHtml(quote.quoteNo ?? quote.id)}<br><b>Tarih:</b> ${escapeHtml(new Date(quote.createdAt).toLocaleDateString('tr-TR'))}${settings.showQr ? '<div class="qr"></div>' : ''}</div></div><div class="box">${customerInfo}</div><table><thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join('')}</tr></thead><tbody>${rowHtml}</tbody></table><div class="totals"><div><span>Ara toplam</span><span>${escapeHtml(money(totals.subtotalUsd, 'USD'))} / ${escapeHtml(money(totals.subtotalTry))}</span></div><div><span>Iskonto</span><span>${escapeHtml(money(totals.discountUsd, 'USD'))} / ${escapeHtml(money(totals.discountTry))}</span></div><div><span>KDV</span><span>${escapeHtml(money(totals.vatUsd, 'USD'))} / ${escapeHtml(money(totals.vatTry))}</span></div><div><b>Genel toplam</b><b>${escapeHtml(money(totals.totalUsd, 'USD'))} / ${escapeHtml(money(totals.totalTry))}</b></div></div><div class="box"><b>Aciklama</b><br>${escapeHtml(quote.note ?? '-')}</div>${settings.showBankInfo ? `<div class="box"><b>Banka bilgileri</b><br>${escapeHtml(settings.bankInfo ?? '')}</div>` : ''}<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:28px">${settings.showSignature ? '<div class="sign">Imza alani</div>' : ''}${settings.showStamp ? '<div class="sign">Kase alani</div>' : ''}</div><div class="footer">${escapeHtml(settings.footerText ?? template?.footer ?? '')}${settings.showWhatsapp ? `<br>WhatsApp: ${escapeHtml(settings.whatsapp ?? '')}` : ''}</div><script>window.addEventListener('load',()=>setTimeout(()=>window.print(),250));</script></body></html>`;
     return { fileName, html, totals };
   }
   function openQuotePdf(quote: Quote) {
     const document = buildQuoteDocument(quote);
     openPreviewDocument(document.fileName, document.html, onNotice, 'PDF teklif');
+  }
+  function buildQuoteWhatsappMessage(quote: Quote, pdfUrl?: string) {
+    const rowAccount = accounts.find((item) => item.id === quote.accountId);
+    const totals = quoteTotals(quote);
+    const lines = [
+      `Merhaba ${rowAccount?.companyName ?? quote.accountName ?? ''},`,
+      '',
+      `${quote.quoteNo ?? quote.id} numarali teklifiniz hazirlanmistir.`,
+      '',
+      'Toplam:',
+      money(totals.totalTry),
+      money(totals.totalUsd, 'USD'),
+      '',
+      `Gecerlilik tarihi: ${new Date(quote.validUntil).toLocaleDateString('tr-TR')}`,
+      '',
+    ];
+    if (pdfUrl) lines.push(`PDF: ${pdfUrl}`, '');
+    lines.push('Iyi calismalar.');
+    return lines.join('\n');
   }
   function sendQuoteWhatsapp(quote: Quote) {
     const rowAccount = accounts.find((item) => item.id === quote.accountId);
@@ -1680,6 +1820,19 @@ function QuotesView({ usdRate, quotes, accounts, products, pdfTemplates, onNotic
     const pdfLink = createPreviewDocument(document.fileName, document.html);
     const totals = document.totals;
     const message = `Merhaba ${rowAccount?.companyName ?? quote.accountName ?? ''},\n\n${quote.quoteNo ?? quote.id} numaralı teklifiniz hazırlanmıştır.\n\nToplam:\n${money(totals.totalTry)}\n${money(totals.totalUsd, 'USD')}\n\nPDF: ${pdfLink.url}\n\nBulut ERP Pro`;
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
+    onNotice(`WhatsApp teklif mesaji PDF linkiyle hazirlandi: ${pdfLink.fileName}`);
+  }
+  function sendQuoteWhatsappFixed(quote: Quote) {
+    const rowAccount = accounts.find((item) => item.id === quote.accountId);
+    const phone = normalizeWhatsappPhone(rowAccount?.whatsapp ?? rowAccount?.phone);
+    if (!phone) {
+      onNotice('WhatsApp numarasi bulunamadi');
+      return;
+    }
+    const document = buildQuoteDocument(quote);
+    const pdfLink = createPreviewDocument(document.fileName, document.html);
+    const message = buildQuoteWhatsappMessage(quote, pdfLink.url);
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
     onNotice(`WhatsApp teklif mesaji PDF linkiyle hazirlandi: ${pdfLink.fileName}`);
   }
@@ -1756,12 +1909,12 @@ function QuotesView({ usdRate, quotes, accounts, products, pdfTemplates, onNotic
             <tbody>{filtered.map((quote) => {
               const rowAccount = accounts.find((item) => item.id === quote.accountId);
               const totals = quoteTotals(quote);
-              return <tr key={quote.id} onClick={() => setSelectedQuote(quote)} className="cursor-pointer border-t border-line transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-900"><td className="px-4 py-3">{new Date(quote.createdAt).toLocaleDateString('tr-TR')}</td><td className="px-4 py-3 font-bold">{quote.quoteNo ?? quote.id}</td><td className="px-4 py-3">{rowAccount?.companyName ?? quote.accountName ?? quote.accountId}</td><td className="px-4 py-3">{rowAccount?.contactName ?? '-'}</td><td className="px-4 py-3">{money(totals.totalTry)}</td><td className="px-4 py-3">{money(totals.totalUsd, 'USD')}</td><td className="px-4 py-3"><Badge>{quote.status}</Badge></td><td className="px-4 py-3">{new Date(quote.validUntil).toLocaleDateString('tr-TR')}</td><td className="px-4 py-3">{quote.createdBy ?? quote.salesRep ?? '-'}</td><td className="px-4 py-3" onClick={(event) => event.stopPropagation()}><Toolbar><Button variant="soft" onClick={() => setSelectedQuote(quote)}>Detay</Button><Button variant="soft" onClick={() => editQuote(quote)}>Duzenle</Button><Button variant="soft" onClick={() => openQuotePdf(quote)}>PDF</Button><Button variant="soft" onClick={() => sendQuoteWhatsappWithPdf(quote)}>WhatsApp</Button><Button variant="soft" onClick={() => approveQuote(quote)}>Satisa donustur</Button></Toolbar></td></tr>;
+              return <tr key={quote.id} onClick={() => setSelectedQuote(quote)} className="cursor-pointer border-t border-line transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-900"><td className="px-4 py-3">{new Date(quote.createdAt).toLocaleDateString('tr-TR')}</td><td className="px-4 py-3 font-bold">{quote.quoteNo ?? quote.id}</td><td className="px-4 py-3">{rowAccount?.companyName ?? quote.accountName ?? quote.accountId}</td><td className="px-4 py-3">{rowAccount?.contactName ?? '-'}</td><td className="px-4 py-3">{money(totals.totalTry)}</td><td className="px-4 py-3">{money(totals.totalUsd, 'USD')}</td><td className="px-4 py-3"><Badge>{quote.status}</Badge></td><td className="px-4 py-3">{new Date(quote.validUntil).toLocaleDateString('tr-TR')}</td><td className="px-4 py-3">{quote.createdBy ?? quote.salesRep ?? '-'}</td><td className="px-4 py-3" onClick={(event) => event.stopPropagation()}><Toolbar><Button variant="soft" onClick={() => setSelectedQuote(quote)}>Detay</Button><Button variant="soft" onClick={() => editQuote(quote)}>Duzenle</Button><Button variant="soft" onClick={() => openQuotePdf(quote)}>PDF</Button><Button variant="soft" onClick={() => sendQuoteWhatsappFixed(quote)}>WhatsApp</Button><Button variant="soft" onClick={() => approveQuote(quote)}>Satisa donustur</Button></Toolbar></td></tr>;
             })}</tbody>
           </table>
         </div>
       </div>
-      {selectedQuote && <QuoteDetailModal quote={selectedQuote} accounts={accounts} products={products} usdRate={usdRate} onClose={() => setSelectedQuote(null)} onEdit={editQuote} onPdf={openQuotePdf} onWhatsapp={sendQuoteWhatsappWithPdf} onApprove={approveQuote} />}
+      {selectedQuote && <QuoteDetailModal quote={selectedQuote} accounts={accounts} products={products} usdRate={usdRate} onClose={() => setSelectedQuote(null)} onEdit={editQuote} onPdf={openQuotePdf} onWhatsapp={sendQuoteWhatsappFixed} onApprove={approveQuote} />}
     </section>
   );
 }
@@ -1929,7 +2082,7 @@ function PdfTemplatesView({ templates, onNotice, onRefresh }: { templates: PdfTe
 }
 
 function ColorInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">{label}<div className="mt-1.5 flex h-11 overflow-hidden rounded-xl border border-line bg-white/90 dark:border-slate-700 dark:bg-slate-900/80"><input type="color" value={value} onChange={(event) => onChange(event.target.value)} className="h-full w-12 cursor-pointer border-0 bg-transparent p-1" /><input value={value} onChange={(event) => onChange(event.target.value)} className="min-w-0 flex-1 bg-transparent px-3 text-sm font-bold outline-none" /></div></label>;
+  return <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">{uiText(label)}<div className="mt-1.5 flex h-11 overflow-hidden rounded-xl border border-line bg-white/90 dark:border-slate-700 dark:bg-slate-900/80"><input type="color" value={value} onChange={(event) => onChange(event.target.value)} className="h-full w-12 cursor-pointer border-0 bg-transparent p-1" /><input value={value} onChange={(event) => onChange(event.target.value)} className="min-w-0 flex-1 bg-transparent px-3 text-sm font-bold outline-none" /></div></label>;
 }
 
 function PdfLivePreview({ template, onChange }: { template: PdfTemplate; onChange: (template: PdfTemplate) => void }) {
@@ -1985,7 +2138,7 @@ function PdfLivePreview({ template, onChange }: { template: PdfTemplate; onChang
   );
 }
 
-function MessageTemplatesView({ templates, onNotice, onRefresh }: { templates: MessageTemplate[]; onNotice: (message: string) => void; onRefresh: () => Promise<void> }) {
+function LegacyMessageTemplatesView({ templates, onNotice, onRefresh }: { templates: MessageTemplate[]; onNotice: (message: string) => void; onRefresh: () => Promise<void> }) {
   async function addTemplate() {
     await apiPost('/message-templates', { type: 'Teklif', name: `Yeni Sablon ${templates.length + 1}`, body: 'Merhaba {MüşteriAdı}, {TeklifNo} teklifiniz hazir.' });
     await onRefresh(); onNotice('Mesaj sablonu eklendi');
@@ -2005,7 +2158,113 @@ function MessageTemplatesView({ templates, onNotice, onRefresh }: { templates: M
   return <DataTable title="Mesaj sablonlari" actions={<Button onClick={addTemplate} icon={<Plus size={17} />}>Sablon olustur</Button>} headers={['Tur', 'Ad', 'Metin', 'Varsayilan', 'Durum', 'Degiskenler', 'Islem']} rows={templates.map((template) => [template.type, template.name, template.body, template.default ? 'Evet' : 'Hayir', template.active ? 'Aktif' : 'Pasif', '{MüşteriAdı}, {ToplamTL}, {ToplamUSD}, {KalanTL}, {KalanUSD}, {SiparişNo}, {TeklifNo}, {VadeTarihi}, {FirmaAdı}', <Toolbar key={template.id}><Button variant="soft" onClick={() => toggle(template)}>{template.active ? 'Pasif yap' : 'Aktif yap'}</Button><Button variant="soft" onClick={() => copyTemplate(template)}>Kopyala</Button><Button variant="soft" onClick={() => makeDefault(template)}>Varsayilan</Button></Toolbar>])} />;
 }
 
-function SalesView({ usdRate, selectedAccountId, accounts, products, categories, sales, onSale, onNotice }: { usdRate: number; selectedAccountId: string; accounts: Account[]; products: Product[]; categories: Category[]; sales: Sale[]; onSale: (accountId: string, cart: CartLine[], paid: number, discount: number, currency: 'TRY' | 'USD', paymentMethod: string) => boolean | Promise<boolean>; onNotice: (message: string) => void }) {
+void LegacyMessageTemplatesView;
+
+function MessageTemplatesView({ templates, onNotice, onRefresh }: { templates: MessageTemplate[]; onNotice: (message: string) => void; onRefresh: () => Promise<void> }) {
+  const [editing, setEditing] = useState<MessageTemplate | null>(null);
+  const [preview, setPreview] = useState<MessageTemplate | null>(null);
+  const variables = ['{cariAdi}', '{tlBakiye}', '{usdBakiye}', '{toplamTL}', '{toplamUSD}', '{fisNo}', '{tarih}', '{firmaAdi}'];
+  const sampleData: Record<string, string> = { cariAdi: 'RAIF GUVENC', tlBakiye: '4.740,26 TL', usdBakiye: '104,70 USD', toplamTL: '10.974 TL', toplamUSD: '242,40 USD', fisNo: 'SF-2026-001', tarih: new Date().toLocaleDateString('tr-TR'), firmaAdi: 'Bulut ERP Pro' };
+  const defaultBodies: Record<string, string> = {
+    BorcHatirlatma: 'Sayin {cariAdi},\n\nGuncel cari bakiyeniz:\nTL bakiye: {tlBakiye}\nUSD bakiye: {usdBakiye}\n\nIyi calismalar.\n{firmaAdi}',
+    Tahsilat: 'Merhaba {cariAdi},\n\n{tarih} tarihinde {toplamTL} / {toplamUSD} karsiligi odemeniz basariyla alinmistir.\n\nKalan bakiyeniz:\n{tlBakiye}\n{usdBakiye}\n\nTesekkur ederiz.\n{firmaAdi}',
+    WhatsAppSatis: 'Sayin {cariAdi},\n\n{fisNo} numarali satis fisiniz hazir.\nToplam: {toplamUSD} / {toplamTL}\nKalan bakiye: {usdBakiye} / {tlBakiye}\n\nIyi calismalar.\n{firmaAdi}',
+    Teklif: 'Merhaba {cariAdi},\n\n{fisNo} numarali teklifiniz hazirlanmistir.\nToplam: {toplamUSD} / {toplamTL}\n\n{firmaAdi}',
+  };
+  function emptyTemplate(type = 'BorcHatirlatma'): MessageTemplate {
+    return { id: '', type, channel: 'WhatsApp', name: 'Yeni mesaj sablonu', body: defaultBodies[type] ?? defaultBodies.BorcHatirlatma, default: false, active: true };
+  }
+  function renderTemplate(body: string) {
+    return Object.entries(sampleData).reduce((message, [key, value]) => message.split(`{${key}}`).join(value), body);
+  }
+  async function saveTemplate(template: MessageTemplate) {
+    const payload = { type: template.type, channel: template.channel ?? 'WhatsApp', name: template.name, body: template.body, active: template.active, default: template.default };
+    if (template.id) await apiPut(`/message-templates/${template.id}`, payload);
+    else await apiPost('/message-templates', payload);
+    await onRefresh();
+    setEditing(null);
+    onNotice('Mesaj sablonu kaydedildi');
+  }
+  async function toggle(template: MessageTemplate) {
+    await apiPut(`/message-templates/${template.id}`, { active: !template.active });
+    await onRefresh();
+    onNotice(template.active ? 'Sablon pasife alindi' : 'Sablon aktife alindi');
+  }
+  async function remove(template: MessageTemplate) {
+    if (!window.confirm(`${template.name} sablonu silinsin mi?`)) return;
+    await apiDelete(`/message-templates/${template.id}`);
+    await onRefresh();
+    onNotice('Mesaj sablonu silindi');
+  }
+  return (
+    <>
+      <DataTable
+        title="Mesaj Sablonlari"
+        actions={<Toolbar><Button onClick={() => setEditing(emptyTemplate())} icon={<Plus size={17} />}>Sablon olustur</Button></Toolbar>}
+        headers={['Mesaj tipi', 'Sablon adi', 'Icerik', 'Varsayilan', 'Durum', 'Degiskenler', 'Islem']}
+        rows={templates.map((template) => [
+          template.channel ?? 'WhatsApp',
+          template.name,
+          <span key={`${template.id}-body`} className="line-clamp-2 max-w-xl whitespace-pre-line text-sm">{template.body}</span>,
+          template.default ? 'Evet' : 'Hayir',
+          template.active ? 'Aktif' : 'Pasif',
+          variables.join(' '),
+          <Toolbar key={template.id}>
+            <Button variant="soft" onClick={() => setEditing(template)}>Duzenle</Button>
+            <Button variant="soft" onClick={() => setPreview(template)}>Onizleme</Button>
+            <Button variant="soft" onClick={() => toggle(template)}>{template.active ? 'Pasif yap' : 'Aktif yap'}</Button>
+            <Button variant="soft" onClick={() => remove(template)}>Sil</Button>
+          </Toolbar>,
+        ])}
+      />
+      {editing && <MessageTemplateModal template={editing} variables={variables} renderTemplate={renderTemplate} onClose={() => setEditing(null)} onSave={saveTemplate} />}
+      {preview && (
+        <ModalFrame title="Mesaj onizleme" onClose={() => setPreview(null)}>
+          <div className="space-y-3">
+            <Info label="Sablon" value={preview.name} />
+            <div className="whitespace-pre-line rounded-2xl border border-line bg-slate-50 p-4 text-sm font-semibold dark:border-slate-700 dark:bg-slate-900">{renderTemplate(preview.body)}</div>
+          </div>
+        </ModalFrame>
+      )}
+    </>
+  );
+}
+
+function MessageTemplateModal({ template, variables, renderTemplate, onClose, onSave }: { template: MessageTemplate; variables: string[]; renderTemplate: (body: string) => string; onClose: () => void; onSave: (template: MessageTemplate) => Promise<void> }) {
+  const [draft, setDraft] = useState<MessageTemplate>(template);
+  return (
+    <ModalFrame title={draft.id ? 'Mesaj sablonu duzenle' : 'Mesaj sablonu olustur'} onClose={onClose}>
+      <div className="space-y-4">
+        <FormGrid>
+          <FormInput label="Sablon adi" value={draft.name} onChange={(name) => setDraft({ ...draft, name })} />
+          <FormSelect label="Mesaj tipi" value={draft.channel ?? 'WhatsApp'} onChange={(channel) => setDraft({ ...draft, channel })} options={['WhatsApp', 'SMS', 'E-posta'].map((item) => ({ label: item, value: item }))} />
+          <FormSelect label="Kullanim alani" value={draft.type} onChange={(type) => setDraft({ ...draft, type })} options={[
+            { label: 'Cari bakiye hatirlatma', value: 'BorcHatirlatma' },
+            { label: 'Tahsilat bildirimi', value: 'Tahsilat' },
+            { label: 'Satis fisi gonderimi', value: 'WhatsAppSatis' },
+            { label: 'Teklif gonderimi', value: 'Teklif' },
+          ]} />
+          <FormSelect label="Durum" value={draft.active ? 'Aktif' : 'Pasif'} onChange={(value) => setDraft({ ...draft, active: value === 'Aktif' })} options={['Aktif', 'Pasif'].map((item) => ({ label: item, value: item }))} />
+        </FormGrid>
+        <FormTextarea label="Mesaj icerigi" value={draft.body} onChange={(body) => setDraft({ ...draft, body })} />
+        <div className="rounded-2xl border border-line bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900">
+          <div className="mb-2 text-sm font-black">Degiskenler</div>
+          <div className="flex flex-wrap gap-2">{variables.map((variable) => <button key={variable} type="button" onClick={() => setDraft({ ...draft, body: `${draft.body}${draft.body.endsWith(' ') || draft.body.endsWith('\n') ? '' : ' '}${variable}` })} className="rounded-full bg-mint px-3 py-1 text-xs font-black text-ocean">{variable}</button>)}</div>
+        </div>
+        <div className="rounded-2xl border border-line bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+          <div className="mb-2 text-sm font-black">Canli onizleme</div>
+          <div className="whitespace-pre-line text-sm font-semibold text-slate-700 dark:text-slate-200">{renderTemplate(draft.body)}</div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-line pt-4 dark:border-slate-700">
+          <Button variant="soft" onClick={onClose}>Vazgec</Button>
+          <Button disabled={!draft.name.trim() || !draft.body.trim()} onClick={() => onSave(draft)}>Kaydet</Button>
+        </div>
+      </div>
+    </ModalFrame>
+  );
+}
+
+function SalesView({ usdRate, selectedAccountId, accounts, products, categories, sales, onSale, onNotice, onRefresh }: { usdRate: number; selectedAccountId: string; accounts: Account[]; products: Product[]; categories: Category[]; sales: Sale[]; onSale: (accountId: string, cart: CartLine[], paid: number, discount: number, currency: 'TRY' | 'USD', paymentMethod: string) => boolean | Promise<boolean>; onNotice: (message: string) => void; onRefresh: () => Promise<void> }) {
   const [accountId, setAccountId] = useState(selectedAccountId || accounts[0]?.id || '');
   const [barcode, setBarcode] = useState('');
   const [query, setQuery] = useState('');
@@ -2042,7 +2301,7 @@ function SalesView({ usdRate, selectedAccountId, accounts, products, categories,
   const remainingUsd = totalUsd - paidUsd;
   const visibleProducts = products.filter((product) => {
     const text = `${product.name} ${product.code} ${product.barcode}`.toLowerCase();
-    const categoryOk = category === 'Tumu' || product.category === category || product.subCategory === category;
+    const categoryOk = productInCategoryTree(product, categories, category);
     return categoryOk && text.includes(query.toLowerCase());
   });
   const stockBadgeClass = (product: Product) => {
@@ -2137,7 +2396,7 @@ function SalesView({ usdRate, selectedAccountId, accounts, products, categories,
             {accounts.map((account) => <option key={account.id} value={account.id}>{account.companyName}</option>)}
           </select>
           <FormInput label="Urun arama" value={query} onChange={setQuery} />
-          <FormSelect label="Kategori" value={category} onChange={setCategory} options={[{ label: 'Tum kategoriler', value: 'Tumu' }, ...categories.map((item) => ({ label: item.name, value: item.name }))]} />
+          <FormSelect label="Kategori" value={category} onChange={setCategory} options={[{ label: 'Tum kategoriler', value: 'Tumu' }, ...categoryOptions(categories)]} />
           <div className="flex gap-2">
             <input ref={barcodeRef} value={barcode} onChange={(event) => setBarcode(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && addByBarcode()} className="h-11 min-w-0 flex-1 rounded-xl border border-line bg-white/90 px-3 font-semibold outline-none transition focus:border-ocean focus:ring-4 focus:ring-ocean/10 dark:border-slate-700 dark:bg-slate-900/80" placeholder="Barkod okut" />
             <IconButton title="Barkod ekle" onClick={addByBarcode}><Barcode size={18} /></IconButton>
@@ -2333,14 +2592,14 @@ function SalesView({ usdRate, selectedAccountId, accounts, products, categories,
           ],
         }))}
       />
-      {selectedSale && <SaleDetailModal sale={selectedSale} products={products} accounts={accounts} fallbackRate={usdRate} onClose={() => setSelectedSale(null)} onNotice={onNotice} />}
+      {selectedSale && <SaleDetailModal sale={selectedSale} products={products} accounts={accounts} fallbackRate={usdRate} onClose={() => setSelectedSale(null)} onNotice={onNotice} onUpdated={async (updated) => { setSelectedSale(updated); await onRefresh(); }} />}
     </section>
   );
 }
 
 function SaleSummaryLine({ label, currency, tryValue, usdValue, strong }: { label: string; currency: 'TRY' | 'USD'; tryValue: number; usdValue: number; strong?: boolean }) {
   const isTotal = label === 'Genel toplam';
-  return <div className={`flex items-center justify-between rounded-2xl border dark:border-slate-700 ${isTotal ? 'border-ocean bg-gradient-to-br from-ocean to-[#0e5c70] p-5 text-white shadow-lg shadow-ocean/20' : strong ? 'border-line bg-slate-50 p-4 shadow-sm dark:bg-slate-900' : 'border-line bg-white/60 p-3 shadow-sm dark:bg-slate-900/40'}`}><span className={`font-bold ${isTotal ? 'text-base text-white' : 'text-sm text-slate-500'}`}>{label}</span><div className={isTotal ? 'scale-110 origin-right' : ''}><PriorityMoney currency={currency} tryValue={tryValue} usdValue={usdValue} /></div></div>;
+  return <div className={`flex items-center justify-between rounded-2xl border dark:border-slate-700 ${isTotal ? 'border-ocean bg-gradient-to-br from-ocean to-[#0e5c70] p-5 text-white shadow-lg shadow-ocean/20' : strong ? 'border-line bg-slate-50 p-4 shadow-sm dark:bg-slate-900' : 'border-line bg-white/60 p-3 shadow-sm dark:bg-slate-900/40'}`}><span className={`font-bold ${isTotal ? 'text-base text-white' : 'text-sm text-slate-500'}`}>{uiText(label)}</span><div className={isTotal ? 'scale-110 origin-right' : ''}><PriorityMoney currency={currency} tryValue={tryValue} usdValue={usdValue} /></div></div>;
 }
 
 function previewCollection(account: Account | undefined, tryAmount: number, usdAmount: number, _rate: number) {
@@ -2408,9 +2667,9 @@ function CollectionsView({ usdRate, selectedAccountId, accounts, collections, pa
 
   async function showReceipt(id: string, print = false) {
     try {
-      const receipt = await apiGet<{ receiptNo: string; status: string; account: string; amountTry: number; amountUsd: number; remainingTry: number; remainingUsd: number }>(`/collections/${id}/receipt`);
-      onNotice(`Makbuz ${receipt.receiptNo}: ${receipt.account}, ${money(receipt.amountTry)} / ${money(receipt.amountUsd, 'USD')}, kalan ${money(receipt.remainingTry)} / ${money(receipt.remainingUsd, 'USD')}`);
-      if (print) window.print();
+      const receipt = await apiGet<CollectionReceiptPreview>(`/collections/${id}/receipt`);
+      const document = collectionReceiptDocument(receipt, print);
+      openPreviewDocument(document.fileName, document.html, onNotice, print ? 'Tahsilat makbuzu yazdırma' : 'Tahsilat makbuzu PDF');
     } catch (error) {
       onNotice(errorMessage(error));
     }
@@ -2488,8 +2747,31 @@ function DealerView({ usdRate, products, accounts, orders, initialSession, onNot
   const [paymentMethod, setPaymentMethod] = useState<'Havale/EFT' | 'Nakit'>('Havale/EFT');
   const [cardModalOpen, setCardModalOpen] = useState(false);
   const [cardForm, setCardForm] = useState({ cardHolder: '', cardNumber: '4242 4242 4242 4242', expiryMonth: '12', expiryYear: '30', cvv: '123', installments: 1, amountTry: 0 });
-  const cartTry = cart.reduce((sum, line) => sum + line.product.dealerTry * line.quantity, 0);
-  const cartUsd = cart.reduce((sum, line) => sum + line.product.dealerUsd * line.quantity, 0);
+  const dealerPrice = (product: Product) => ({
+    tryValue: roundMoney(product.dealerTry || product.saleTry || tryFromUsd(product.dealerUsd || product.saleUsd || 0, usdRate)),
+    usdValue: roundMoney(product.dealerUsd || product.saleUsd || usdFromTry(product.dealerTry || product.saleTry || 0, usdRate)),
+  });
+  const orderItemPrice = (item: TransactionItem) => {
+    const product = products.find((candidate) => candidate.id === item.productId);
+    const fallback = product ? dealerPrice(product) : { tryValue: 0, usdValue: 0 };
+    const unitTry = roundMoney(item.unitPriceTry || fallback.tryValue);
+    const unitUsd = roundMoney(item.unitPriceUsd || fallback.usdValue);
+    return {
+      unitTry,
+      unitUsd,
+      totalTry: roundMoney(item.lineTotalTry || unitTry * item.quantity),
+      totalUsd: roundMoney(item.lineTotalUsd || unitUsd * item.quantity),
+    };
+  };
+  const orderTotals = (order: Order) => {
+    const itemTotals = (order.items ?? []).map(orderItemPrice);
+    return {
+      tryValue: roundMoney(order.totalTry || itemTotals.reduce((sum, item) => sum + item.totalTry, 0)),
+      usdValue: roundMoney(order.totalUsd || itemTotals.reduce((sum, item) => sum + item.totalUsd, 0)),
+    };
+  };
+  const cartTry = cart.reduce((sum, line) => sum + dealerPrice(line.product).tryValue * line.quantity, 0);
+  const cartUsd = cart.reduce((sum, line) => sum + dealerPrice(line.product).usdValue * line.quantity, 0);
   const authHeaders = () => ({ Authorization: `Bearer ${localStorage.getItem('erp_token') ?? ''}` });
   async function portalGet<T>(path: string): Promise<T> {
     const response = await fetch(apiUrl(path), { headers: authHeaders() });
@@ -2651,7 +2933,7 @@ function DealerView({ usdRate, products, accounts, orders, initialSession, onNot
         <div className="w-full max-w-md rounded border border-line bg-white p-6 shadow-panel dark:border-slate-700 dark:bg-[#17202a]">
           <div className="grid h-14 w-14 place-items-center rounded bg-mint text-ocean"><UserRound /></div>
           <h1 className="mt-4 text-2xl font-bold">B2B Bayi Girisi</h1>
-          <p className="mt-1 text-sm text-slate-500">Musteri veya bayi hesabiyla portala gir.</p>
+          <p className="mt-1 text-sm text-slate-500">{uiText('Musteri veya bayi hesabiyla portala gir.')}</p>
           <div className="mt-5 space-y-3">
             <FormInput label="E-posta" value={loginForm.email} onChange={(email) => setLoginForm({ ...loginForm, email })} />
             <FormInput label="Sifre" type="password" value={loginForm.password} onChange={(password) => setLoginForm({ ...loginForm, password })} />
@@ -2697,22 +2979,26 @@ function DealerView({ usdRate, products, accounts, orders, initialSession, onNot
       <DataTable
         title="Bayi urunleri"
         headers={['Urun', 'Stok', 'Bayi TL', 'Bayi USD', 'Siparis']}
-        rows={products.map((product) => [
-          <div key={`${product.id}-dealer`} className="flex items-center gap-3"><ProductThumb product={product} /><span className="font-semibold">{product.name}</span></div>,
-          `${product.stock} adet`,
-          money(product.dealerTry),
-          money(product.dealerUsd, 'USD'),
-          <Button key={product.id} disabled={product.stock <= 0} onClick={() => addToCart(product)} icon={<ShoppingCart size={16} />}>Sepete ekle</Button>,
-        ])}
+        rows={products.map((product) => {
+          const price = dealerPrice(product);
+          return [
+            <div key={`${product.id}-dealer`} className="flex items-center gap-3"><ProductThumb product={product} /><span className="font-semibold">{product.name}</span></div>,
+            `${product.stock} adet`,
+            money(price.tryValue),
+            money(price.usdValue, 'USD'),
+            <Button key={product.id} disabled={product.stock <= 0} onClick={() => addToCart(product)} icon={<ShoppingCart size={16} />}>Sepete ekle</Button>,
+          ];
+        })}
       />
       <Panel title="Sepet">
         <div className="space-y-3">
           {cart.map((line) => (
             <div key={line.product.id} className="rounded border border-line p-3 text-sm dark:border-slate-700">
               <div className="font-semibold">{line.product.name}</div>
+              <div className="mt-1 text-xs text-slate-500">Birim: {money(dealerPrice(line.product).tryValue)} / {money(dealerPrice(line.product).usdValue, 'USD')}</div>
               <div className="mt-2 flex items-center justify-between gap-2">
                 <input className="h-9 w-20 rounded border border-line px-2 dark:border-slate-700 dark:bg-slate-900" value={line.quantity} onChange={(event) => setCart((current) => current.map((item) => item.product.id === line.product.id ? { ...item, quantity: Math.max(1, parseNumber(event.target.value)) } : item))} />
-                <span>{money(line.product.dealerTry * line.quantity)}</span>
+                <span className="text-right font-bold">{money(dealerPrice(line.product).tryValue * line.quantity)}<br /><span className="text-xs text-slate-500">{money(dealerPrice(line.product).usdValue * line.quantity, 'USD')}</span></span>
               </div>
             </div>
           ))}
@@ -2723,29 +3009,32 @@ function DealerView({ usdRate, products, accounts, orders, initialSession, onNot
       </Panel>
       </div>
       <div className="grid gap-5 xl:grid-cols-2">
-        <DataTable title="Bayi cari ekstresi" headers={['Tarih', 'Islem', 'Aciklama', 'Borc TL', 'Alacak TL']} rows={(detail?.ledger ?? []).map((line) => [new Date(line.date).toLocaleDateString('tr-TR'), line.type, line.description, money(line.debitTry), money(line.creditTry)])} />
+        <DataTable title="Bayi cari ekstresi" headers={['Tarih', 'Islem', 'Aciklama', 'Borc TL', 'Borc USD', 'Alacak TL', 'Alacak USD']} rows={(detail?.ledger ?? []).map((line) => [new Date(line.date).toLocaleDateString('tr-TR'), line.type, line.description, money(line.debitTry), money(line.debitUsd, 'USD'), money(line.creditTry), money(line.creditUsd, 'USD')])} />
         <DetailTable
           title={session.role === 'ADMIN' ? 'Admin siparis paneli' : 'Siparis gecmisim'}
           headers={['Siparis', 'Bayi', 'Durum', 'TL', 'USD', 'Tarih', 'Islem']}
-          rows={(session.role === 'ADMIN' ? orders : dealerOrders).map((order) => ({
-            date: order.createdAt,
-            onClick: () => setSelectedOrder(order),
-            cells: [
-              order.id,
-              order.accountName ?? order.dealerName ?? order.accountId,
-              order.status,
-              money(order.totalTry),
-              money(order.totalUsd, 'USD'),
-              new Date(order.createdAt).toLocaleDateString('tr-TR'),
-              <Toolbar key={`${order.id}-actions`}>
-                <Button variant="soft" onClick={() => setSelectedOrder(order)}>Detay</Button>
-                {session.role === 'ADMIN' && order.status === 'Beklemede' && <Button variant="soft" onClick={() => approveOrder(order)}>Onayla</Button>}
-              </Toolbar>,
-            ],
-          }))}
+          rows={(session.role === 'ADMIN' ? orders : dealerOrders).map((order) => {
+            const totals = orderTotals(order);
+            return {
+              date: order.createdAt,
+              onClick: () => setSelectedOrder(order),
+              cells: [
+                order.id,
+                order.accountName ?? order.dealerName ?? order.accountId,
+                order.status,
+                money(totals.tryValue),
+                money(totals.usdValue, 'USD'),
+                new Date(order.createdAt).toLocaleDateString('tr-TR'),
+                <Toolbar key={`${order.id}-actions`}>
+                  <Button variant="soft" onClick={() => setSelectedOrder(order)}>Detay</Button>
+                  {session.role === 'ADMIN' && order.status === 'Beklemede' && <Button variant="soft" onClick={() => approveOrder(order)}>Onayla</Button>}
+                </Toolbar>,
+              ],
+            };
+          })}
         />
       </div>
-      {selectedOrder && <OrderDetailModal order={selectedOrder} products={products} accounts={accounts} isAdmin={session.role === 'ADMIN'} onClose={() => setSelectedOrder(null)} onApprove={approveOrder} onNotice={onNotice} onRefresh={onRefresh} />}
+      {selectedOrder && <OrderDetailModal order={selectedOrder} products={products} accounts={accounts} usdRate={usdRate} isAdmin={session.role === 'ADMIN'} onClose={() => setSelectedOrder(null)} onApprove={approveOrder} onNotice={onNotice} onRefresh={onRefresh} />}
       {cardModalOpen && dealer && (
         <ModalFrame title="Guvenli online kart odemesi" onClose={() => setCardModalOpen(false)}>
           <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
@@ -2781,8 +3070,28 @@ function DealerView({ usdRate, products, accounts, orders, initialSession, onNot
   );
 }
 
-function OrderDetailModal({ order, products, accounts, isAdmin, onClose, onApprove, onNotice, onRefresh }: { order: Order; products: Product[]; accounts: Account[]; isAdmin: boolean; onClose: () => void; onApprove: (order: Order) => Promise<void>; onNotice: (message: string) => void; onRefresh: () => Promise<void> }) {
+function OrderDetailModal({ order, products, accounts, usdRate, isAdmin, onClose, onApprove, onNotice, onRefresh }: { order: Order; products: Product[]; accounts: Account[]; usdRate: number; isAdmin: boolean; onClose: () => void; onApprove: (order: Order) => Promise<void>; onNotice: (message: string) => void; onRefresh: () => Promise<void> }) {
   const account = accounts.find((item) => item.id === order.accountId);
+  const rate = order.exchangeRate && order.exchangeRate > 1 ? order.exchangeRate : usdRate;
+  const dealerPrice = (product?: Product) => ({
+    tryValue: roundMoney(product?.dealerTry || product?.saleTry || tryFromUsd(product?.dealerUsd || product?.saleUsd || 0, rate)),
+    usdValue: roundMoney(product?.dealerUsd || product?.saleUsd || usdFromTry(product?.dealerTry || product?.saleTry || 0, rate)),
+  });
+  const itemPrice = (item: TransactionItem) => {
+    const product = products.find((candidate) => candidate.id === item.productId);
+    const fallback = dealerPrice(product);
+    const unitTry = roundMoney(item.unitPriceTry || fallback.tryValue);
+    const unitUsd = roundMoney(item.unitPriceUsd || fallback.usdValue);
+    return {
+      unitTry,
+      unitUsd,
+      totalTry: roundMoney(item.lineTotalTry || unitTry * item.quantity),
+      totalUsd: roundMoney(item.lineTotalUsd || unitUsd * item.quantity),
+    };
+  };
+  const lineTotals = (order.items ?? []).map(itemPrice);
+  const totalTry = roundMoney(order.totalTry || lineTotals.reduce((sum, item) => sum + item.totalTry, 0));
+  const totalUsd = roundMoney(order.totalUsd || lineTotals.reduce((sum, item) => sum + item.totalUsd, 0));
   async function setStatus(status: string) {
     try {
       await apiPost(`/orders/${order.id}/status`, { status });
@@ -2802,19 +3111,20 @@ function OrderDetailModal({ order, products, accounts, isAdmin, onClose, onAppro
           <Info label="Telefon" value={order.phone ?? account?.phone ?? '-'} />
           <Info label="Durum" value={order.status} />
           <Info label="Tarih" value={new Date(order.createdAt).toLocaleString('tr-TR')} />
-          <Info label="Kur" value={String(order.exchangeRate ?? '-')} />
+          <Info label="Kur" value={String(rate)} />
         </div>
         <div className="overflow-x-auto rounded-2xl border border-line dark:border-slate-700">
           <table className="w-full min-w-[720px] text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-900"><tr><th className="p-3 text-left">Urun</th><th className="p-3">Adet</th><th className="p-3">Birim TL/USD</th><th className="p-3">Toplam TL/USD</th></tr></thead>
             <tbody>{(order.items ?? []).map((item) => {
               const product = products.find((candidate) => candidate.id === item.productId);
-              return <tr key={`${order.id}-${item.productId}`} className="border-t border-line dark:border-slate-700"><td className="p-3 font-semibold">{item.productName ?? product?.name ?? item.productId}</td><td className="p-3 text-center">{item.quantity}</td><td className="p-3"><DualMoney compact tryValue={item.unitPriceTry ?? product?.dealerTry ?? 0} usdValue={item.unitPriceUsd ?? product?.dealerUsd ?? 0} /></td><td className="p-3"><DualMoney compact tryValue={item.lineTotalTry ?? 0} usdValue={item.lineTotalUsd ?? 0} /></td></tr>;
+              const price = itemPrice(item);
+              return <tr key={`${order.id}-${item.productId}`} className="border-t border-line dark:border-slate-700"><td className="p-3 font-semibold">{item.productName ?? product?.name ?? item.productId}</td><td className="p-3 text-center">{item.quantity}</td><td className="p-3"><DualMoney compact tryValue={price.unitTry} usdValue={price.unitUsd} /></td><td className="p-3"><DualMoney compact tryValue={price.totalTry} usdValue={price.totalUsd} /></td></tr>;
             })}</tbody>
           </table>
         </div>
         <div className="grid gap-3 md:grid-cols-2">
-          <DualSummary label="Genel toplam" tryValue={order.totalTry} usdValue={order.totalUsd} strong />
+          <DualSummary label="Genel toplam" tryValue={totalTry} usdValue={totalUsd} strong />
           <div className="rounded-2xl border border-line bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-900"><div className="font-bold text-slate-500">Aciklama</div><div className="mt-1">{order.description || '-'}</div></div>
         </div>
         <div className="flex flex-wrap justify-end gap-2 border-t border-line pt-4 dark:border-slate-700">
@@ -2862,7 +3172,17 @@ function PurchasesView({ usdRate, accounts, products, purchases, supplierPayment
   }
   function selectProduct(uid: string, productId: string) {
     const product = products.find((item) => item.id === productId);
-    setLine(uid, { productId, priceTry: product?.purchaseTry ?? 0, priceUsd: product?.purchaseUsd ?? 0, quantity: productId ? 1 : 0 });
+    const baseTry = product?.purchaseTry || tryFromUsd(product?.purchaseUsd ?? 0, usdRate);
+    const baseUsd = product?.purchaseUsd || usdFromTry(baseTry, usdRate);
+    setLine(uid, { productId, priceTry: roundMoney(baseTry), priceUsd: roundMoney(baseUsd), vatRate: product?.vatRate ?? 20, quantity: productId ? 1 : 0 });
+  }
+  function setLineTryPrice(uid: string, value: string) {
+    const priceTry = positiveNumber(value);
+    setLine(uid, { priceTry, priceUsd: roundMoney(usdFromTry(priceTry, usdRate)) });
+  }
+  function setLineUsdPrice(uid: string, value: string) {
+    const priceUsd = positiveNumber(value);
+    setLine(uid, { priceUsd, priceTry: roundMoney(tryFromUsd(priceUsd, usdRate)) });
   }
   function addLine() {
     setLines((current) => [...current, emptyLine()]);
@@ -2880,8 +3200,8 @@ function PurchasesView({ usdRate, accounts, products, purchases, supplierPayment
         uid: purchaseUid(),
         productId: product.id,
         quantity: positiveNumber(cells[1] ?? 1) || 1,
-        priceTry: positiveNumber(cells[2] ?? product.purchaseTry),
-        priceUsd: positiveNumber(cells[3] ?? product.purchaseUsd),
+        priceTry: roundMoney(positiveNumber(cells[2] ?? product.purchaseTry) || tryFromUsd(positiveNumber(cells[3] ?? product.purchaseUsd), usdRate)),
+        priceUsd: roundMoney(positiveNumber(cells[3] ?? product.purchaseUsd) || usdFromTry(positiveNumber(cells[2] ?? product.purchaseTry), usdRate)),
         vatRate: positiveNumber(cells[4] ?? 20),
         gross: false,
       };
@@ -2938,8 +3258,8 @@ function PurchasesView({ usdRate, accounts, products, purchases, supplierPayment
                     <tr key={line.uid} className="border-t border-line dark:border-slate-700">
                       <td className="px-3 py-2"><select value={line.productId} onChange={(event) => selectProduct(line.uid, event.target.value)} className="h-10 w-full rounded-xl border border-line bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-900"><option value="">Urun sec</option>{products.map((item) => <option key={item.id} value={item.id}>{item.code} - {item.name}</option>)}</select>{product && <div className="mt-1 text-xs text-slate-500">Stok: {product.stock} adet</div>}</td>
                       <td className="px-3 py-2"><input type="number" min="1" value={line.quantity} onChange={(event) => setLine(line.uid, { quantity: positiveNumber(event.target.value) || 1 })} className="h-10 w-20 rounded-xl border border-line bg-white px-2 text-center font-bold dark:border-slate-700 dark:bg-slate-900" /></td>
-                      <td className="px-3 py-2"><input value={line.priceTry} onChange={(event) => setLine(line.uid, { priceTry: positiveNumber(event.target.value) })} className="h-10 w-28 rounded-xl border border-line bg-white px-2 dark:border-slate-700 dark:bg-slate-900" /></td>
-                      <td className="px-3 py-2"><input value={line.priceUsd} onChange={(event) => setLine(line.uid, { priceUsd: positiveNumber(event.target.value) })} className="h-10 w-28 rounded-xl border border-line bg-white px-2 dark:border-slate-700 dark:bg-slate-900" /></td>
+                      <td className="px-3 py-2"><input inputMode="decimal" value={line.priceTry} onChange={(event) => setLineTryPrice(line.uid, event.target.value)} className="h-10 w-28 rounded-xl border border-line bg-white px-2 dark:border-slate-700 dark:bg-slate-900" /></td>
+                      <td className="px-3 py-2"><input inputMode="decimal" value={line.priceUsd} onChange={(event) => setLineUsdPrice(line.uid, event.target.value)} className="h-10 w-28 rounded-xl border border-line bg-white px-2 dark:border-slate-700 dark:bg-slate-900" /></td>
                       <td className="px-3 py-2"><select value={line.vatRate} onChange={(event) => setLine(line.uid, { vatRate: positiveNumber(event.target.value) })} className="h-10 rounded-xl border border-line bg-white px-2 dark:border-slate-700 dark:bg-slate-900">{[0, 1, 10, 20].map((rate) => <option key={rate} value={rate}>%{rate}</option>)}</select></td>
                       <td className="px-3 py-2"><input type="checkbox" checked={line.gross} onChange={(event) => setLine(line.uid, { gross: event.target.checked })} /></td>
                       <td className="px-3 py-2"><DualMoney compact tryValue={lineGrossTry(line) * line.quantity} usdValue={lineGrossUsd(line) * line.quantity} /></td>
@@ -2956,10 +3276,11 @@ function PurchasesView({ usdRate, accounts, products, purchases, supplierPayment
               <textarea value={pasteText} onChange={(event) => setPasteText(event.target.value)} onPaste={(event) => { const text = event.clipboardData.getData('text'); if (text) setTimeout(() => importPastedRows(text), 0); }} placeholder="Excel'den yapistir: Urun kodu/barkod/ad, adet, TL fiyat, USD fiyat, KDV" className="h-24 w-full rounded-2xl border border-line bg-white/90 p-3 text-sm outline-none focus:border-ocean focus:ring-4 focus:ring-ocean/10 dark:border-slate-700 dark:bg-slate-900/80" />
             </div>
             <div className="rounded-2xl border border-line bg-slate-50 p-4 shadow-soft dark:border-slate-700 dark:bg-slate-900">
-              <Summary label="Ara toplam" value={draft.currency === 'USD' ? money(subtotalUsd, 'USD') : money(subtotalTry)} />
-              <Summary label="KDV" value={draft.currency === 'USD' ? money(vatUsd, 'USD') : money(vatTry)} />
-              <Summary label="Genel toplam" value={draft.currency === 'USD' ? money(totalUsd, 'USD') : money(totalTry)} strong />
-              <div className="mt-3 text-xs font-semibold text-slate-500">Karsilik: {draft.currency === 'USD' ? money(totalTry) : money(totalUsd, 'USD')}</div>
+              <div className="space-y-3">
+                <DualSummary label="Ara toplam" tryValue={subtotalTry} usdValue={subtotalUsd} />
+                <DualSummary label="KDV" tryValue={vatTry} usdValue={vatUsd} />
+                <DualSummary label="Genel toplam" tryValue={totalTry} usdValue={totalUsd} strong />
+              </div>
             </div>
           </div>
         </Panel>
@@ -3297,7 +3618,7 @@ function IntegrationsView({ accounts, onDebt }: { accounts: Account[]; onDebt: (
   );
 }
 
-function AccountModal({ initial, onClose, onSave }: { initial: Account | null; onClose: () => void; onSave: (payload: Partial<Account>) => void }) {
+function AccountModal({ initial, onClose, onSave }: { initial: Account | null; onClose: () => void; onSave: (payload: Partial<Account> & { autoCode?: boolean }) => void }) {
   const generateAccountCode = (type: string) => {
     const prefix = type === 'TEDARIKCI' ? 'TD' : type === 'BAYI' ? 'BY' : 'CR';
     const start = type === 'TEDARIKCI' ? 2001 : type === 'BAYI' ? 3001 : 1001;
@@ -3313,18 +3634,24 @@ function AccountModal({ initial, onClose, onSave }: { initial: Account | null; o
       <FormGrid>
         <FormInput label="Cari kod" value={form.code} onChange={(code) => { setCodeTouched(true); setForm({ ...form, code }); }} />
         <FormSelect label="Tip" value={form.type ?? 'MUSTERI'} onChange={changeType} options={['MUSTERI', 'BAYI', 'TEDARIKCI'].map((item) => ({ label: item, value: item }))} />
-        <FormInput label="Firma adi" value={form.companyName} onChange={(companyName) => setForm({ ...form, companyName })} />
+        <FormInput label="Firma adı" value={form.companyName} onChange={(companyName) => setForm({ ...form, companyName })} />
         <FormInput label="Yetkili" value={form.contactName} onChange={(contactName) => setForm({ ...form, contactName })} />
         <FormInput label="Telefon" value={form.phone} onChange={(phone) => setForm({ ...form, phone })} />
         <FormInput label="WhatsApp" value={form.whatsapp} onChange={(whatsapp) => setForm({ ...form, whatsapp })} />
         <FormInput label="E-posta" value={form.email} onChange={(email) => setForm({ ...form, email })} />
-        <FormInput label="Vergi no" value={form.taxNumber} onChange={(taxNumber) => setForm({ ...form, taxNumber })} />
+        <FormInput label="Vergi dairesi" value={form.taxOffice} onChange={(taxOffice) => setForm({ ...form, taxOffice })} />
+        <FormInput label="Vergi numarası" value={form.taxNumber} onChange={(taxNumber) => setForm({ ...form, taxNumber })} />
+        <FormInput label="İl" value={form.city} onChange={(city) => setForm({ ...form, city })} />
+        <FormInput label="İlçe" value={form.district} onChange={(district) => setForm({ ...form, district })} />
         <FormNumber label="Risk limiti" value={Number(form.riskLimit ?? 0)} setValue={(riskLimit) => setForm({ ...form, riskLimit })} />
-        <FormNumber label="Vade gunu" value={Number(form.dueDay ?? 0)} setValue={(dueDay) => setForm({ ...form, dueDay })} />
+        <FormNumber label="Vade günü" value={Number(form.dueDay ?? 0)} setValue={(dueDay) => setForm({ ...form, dueDay })} />
       </FormGrid>
+      <div className="mt-3">
+        <FormTextarea label="Adres" value={form.address} onChange={(address) => setForm({ ...form, address })} />
+      </div>
       <div className="sticky bottom-0 -mx-5 mt-5 flex justify-end gap-2 border-t border-line bg-white px-5 py-4 dark:border-slate-700 dark:bg-[#17202a]">
         <Button variant="soft" onClick={onClose}>Vazgec</Button>
-        <Button disabled={!form.companyName} onClick={() => onSave(form)} icon={<Plus size={17} />}>Cariyi kaydet</Button>
+        <Button disabled={!form.companyName} onClick={() => onSave({ ...form, autoCode: !initial && !codeTouched })} icon={<Plus size={17} />}>Cariyi kaydet</Button>
       </div>
     </ModalFrame>
   );
@@ -3396,7 +3723,7 @@ function ProductModal({ initial, products, categories, usdRate, onClose, onSave,
         <FormInput label="Urun kodu" value={form.code} onChange={(code) => setForm({ ...form, code })} />
         <FormInput label="Barkod" value={form.barcode} onChange={(barcode) => setForm({ ...form, barcode })} />
         <div>
-          <FormSelect label="Kategori" value={form.category ?? ''} onChange={(category) => setForm({ ...form, category })} options={categories.filter((item) => item.active).map((item) => ({ label: item.parentId ? `- ${item.name}` : item.name, value: item.name }))} />
+          <FormSelect label="Kategori" value={form.category ?? ''} onChange={(category) => setForm({ ...form, category })} options={categoryOptions(categories.filter((item) => item.active))} />
           <button type="button" onClick={quickCategory} className="mt-2 text-xs font-semibold text-ocean hover:underline">Yeni kategori ekle</button>
         </div>
         <FormInput label="Marka" value={form.brand} onChange={(brand) => setForm({ ...form, brand })} />
@@ -3454,6 +3781,9 @@ function AccountDetailPage({ usdRate, detail, products, accounts, users, onCreat
     ['Kod', account.code],
     ['Tip', account.type],
     ['Telefon', account.phone ?? '-'],
+    ['Adres', [account.address, account.district, account.city].filter(Boolean).join(' / ') || '-'],
+    ['Vergi dairesi', account.taxOffice || '-'],
+    ['Vergi numarası', account.taxNumber || '-'],
     ['Risk limiti', money(account.riskLimit)],
     ['Vade', `${account.dueDay} gun`],
     ['TL bakiye', money(account.balanceTry), account.balanceTry > 0 ? 'debt' : account.balanceTry < 0 ? 'credit' : 'neutral'],
@@ -3462,7 +3792,7 @@ function AccountDetailPage({ usdRate, detail, products, accounts, users, onCreat
   const ledgerRows = detail.ledger.map((line) => ({
     date: line.date,
     onClick: () => {
-      if (line.type === 'Satis') setSelectedSale(detail.sales.find((item) => item.id === line.id) ?? null);
+      if (line.type === 'Satis' || line.type === 'Satis iptal edildi') setSelectedSale(detail.sales.find((item) => item.id === line.id) ?? null);
       if (line.type === 'Alis') setSelectedPurchase((detail.purchases ?? []).find((item) => item.id === line.id) ?? null);
       if (line.type === 'Tahsilat') setSelectedCollection(detail.collections.find((item) => item.id === line.id) ?? null);
       if (line.type === 'Tedarikci odemesi') setSelectedPayment((detail.supplierPayments ?? []).find((item) => item.id === line.id) ?? null);
@@ -3497,7 +3827,7 @@ function AccountDetailPage({ usdRate, detail, products, accounts, users, onCreat
         <DualMoney key={`${sale.id}-total`} compact tryValue={totalTry} usdValue={totalUsd} />,
         <DualMoney key={`${sale.id}-paid`} compact tryValue={paidTry} usdValue={paidUsd} />,
         <DualMoney key={`${sale.id}-remaining`} compact tryValue={remainingTry} usdValue={remainingUsd} />,
-        remainingTry > 0 || remainingUsd > 0 ? 'Acik' : 'Kapandi',
+        sale.status === 'Iptal' ? 'Iptal' : (remainingTry > 0 || remainingUsd > 0 ? 'Acik' : 'Kapandi'),
         <Button key={`${sale.id}-detail`} variant="soft" onClick={() => setSelectedSale(sale)}>Detay</Button>,
       ],
     };
@@ -3758,6 +4088,15 @@ function CollectionDetailModal({ collection, account, usdRate, onClose, onNotice
       onNotice(errorMessage(error));
     }
   }
+  async function openReceiptPdf(print = false) {
+    try {
+      const receipt = await apiGet<CollectionReceiptPreview>(`/collections/${collection.id}/receipt`);
+      const document = collectionReceiptDocument(receipt, print);
+      openPreviewDocument(document.fileName, document.html, onNotice, print ? 'Tahsilat makbuzu yazdırma' : 'Tahsilat makbuzu PDF');
+    } catch (error) {
+      onNotice(errorMessage(error));
+    }
+  }
   return (
     <ModalFrame title={`Tahsilat detayi - ${collection.receiptNo ?? collection.id}`} onClose={onClose}>
       <div className="space-y-4">
@@ -3770,7 +4109,7 @@ function CollectionDetailModal({ collection, account, usdRate, onClose, onNotice
           <DualSummary label="Bakiyeye uygulanan" tryValue={collection.appliedToTlBalance ?? 0} usdValue={collection.appliedToUsdBalance ?? 0} />
           <DualSummary label="Kalan bakiye" tryValue={remainingTry} usdValue={remainingUsd} strong />
         </div>
-        <div className="flex justify-end gap-2"><Button variant="soft" onClick={() => window.print()} icon={<FileDown size={17} />}>Makbuz yazdir</Button><Button onClick={sendMessage} icon={<MessageCircle size={17} />}>WhatsApp gonder</Button></div>
+        <div className="flex justify-end gap-2"><Button variant="soft" onClick={() => openReceiptPdf(true)} icon={<FileDown size={17} />}>Makbuz PDF</Button><Button onClick={sendMessage} icon={<MessageCircle size={17} />}>WhatsApp gonder</Button></div>
       </div>
     </ModalFrame>
   );
@@ -3832,7 +4171,7 @@ function SupplierPaymentModal({ account, onClose, onSave }: { account: Account; 
 
 function SummaryCard({ label, value, tone = 'neutral' }: { label: string; value: string; tone?: 'debt' | 'credit' | 'neutral' }) {
   const color = tone === 'debt' ? 'text-rose' : tone === 'credit' ? 'text-emerald-700 dark:text-emerald-300' : 'text-ink dark:text-slate-100';
-  return <div className="rounded-2xl border border-white/80 bg-white/90 p-4 shadow-soft dark:border-slate-700/70 dark:bg-[#17202a]/90"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</div><div className={`mt-2 text-base font-black ${color}`}>{value}</div></div>;
+  return <div className="rounded-2xl border border-white/80 bg-white/90 p-4 shadow-soft dark:border-slate-700/70 dark:bg-[#17202a]/90"><div className="text-xs font-bold uppercase tracking-wide text-slate-500">{uiText(label)}</div><div className={`mt-2 text-base font-black ${color}`}>{value}</div></div>;
 }
 
 function normalizeWhatsappPhone(value?: string) {
@@ -3866,16 +4205,115 @@ function openPreviewDocument(fileName: string, html: string, onNotice: (message:
     onNotice('PDF onizleme penceresi acilamadi. Tarayici popup iznini kontrol edin.');
     return null;
   }
-  onNotice(`${label} hazirlandi: ${fileName}`);
+  onNotice(`${uiText(label)} hazırlandı: ${fileName}`);
   return documentLink;
 }
 
-function SaleDetailModal({ sale, products, accounts, fallbackRate, onClose, onNotice, onUpdated }: { sale: Sale; products: Product[]; accounts: Account[]; fallbackRate: number; onClose: () => void; onNotice: (message: string) => void; onUpdated?: (sale: Sale) => void | Promise<void> }) {
+type CollectionReceiptPreview = {
+  receiptNo: string;
+  status?: string;
+  account: string;
+  accountPhone?: string;
+  accountTaxOffice?: string;
+  accountTaxNumber?: string;
+  accountAddress?: string;
+  accountCity?: string;
+  accountDistrict?: string;
+  date: string;
+  method: string;
+  amountTry: number;
+  amountUsd: number;
+  exchangeRate: number;
+  appliedToTlBalance?: number;
+  appliedToUsdBalance?: number;
+  remainingTry: number;
+  remainingUsd: number;
+  description?: string;
+};
+
+function collectionReceiptDocument(receipt: CollectionReceiptPreview, autoPrint = false) {
+  const fileName = `tahsilat-makbuzu-${receipt.receiptNo}.pdf`;
+  const html = `<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(fileName)}</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    body { font-family: Arial, sans-serif; color: #17202a; margin: 0; background: #f6f8fb; }
+    .page { max-width: 820px; min-height: 1080px; margin: 24px auto; background: #fff; padding: 34px; box-shadow: 0 18px 60px rgba(15,23,42,.12); }
+    .header { display: flex; justify-content: space-between; gap: 24px; border-bottom: 3px solid #126c82; padding-bottom: 18px; }
+    .brand { font-size: 24px; font-weight: 900; color: #126c82; }
+    .muted { color: #64748b; font-size: 12px; }
+    h1 { margin: 22px 0 8px; font-size: 26px; }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 22px 0; }
+    .box { border: 1px solid #d8e2ea; border-radius: 12px; padding: 13px; }
+    .label { color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+    .value { margin-top: 6px; font-size: 15px; font-weight: 800; }
+    table { width: 100%; border-collapse: collapse; margin-top: 18px; }
+    th { background: #eef8f5; color: #126c82; text-align: left; font-size: 12px; padding: 12px; }
+    td { border-bottom: 1px solid #e5edf3; padding: 12px; font-size: 13px; }
+    .totals { margin-top: 22px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .total { border-radius: 14px; background: #0f172a; color: #fff; padding: 16px; }
+    .blue { color: #126c82; } .green { color: #15803d; }
+    .footer { margin-top: 70px; display: grid; grid-template-columns: 1fr 1fr; gap: 36px; }
+    .sign { border-top: 1px dashed #94a3b8; padding-top: 10px; text-align: center; color: #64748b; }
+    @media print { body { background: #fff; } .page { margin: 0; box-shadow: none; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="header">
+      <div>
+        <div class="brand">Bulut ERP Pro</div>
+        <div class="muted">On muhasebe, B2B, POS</div>
+      </div>
+      <div style="text-align:right">
+        <div class="muted">Makbuz No</div>
+        <div class="value">${escapeHtml(receipt.receiptNo)}</div>
+        <div class="muted">${new Date(receipt.date).toLocaleString('tr-TR')}</div>
+      </div>
+    </div>
+    <h1>Tahsilat Makbuzu</h1>
+    <div class="grid">
+      <div class="box"><div class="label">Cari</div><div class="value">${escapeHtml(receipt.account)}</div></div>
+      <div class="box"><div class="label">Telefon</div><div class="value">${escapeHtml(receipt.accountPhone || '-')}</div></div>
+      <div class="box"><div class="label">Adres</div><div class="value">${escapeHtml([receipt.accountAddress, receipt.accountDistrict, receipt.accountCity].filter(Boolean).join(' / ') || '-')}</div></div>
+      <div class="box"><div class="label">Vergi dairesi</div><div class="value">${escapeHtml(receipt.accountTaxOffice || '-')}</div></div>
+      <div class="box"><div class="label">Vergi numarası</div><div class="value">${escapeHtml(receipt.accountTaxNumber || '-')}</div></div>
+      <div class="box"><div class="label">Ödeme yöntemi</div><div class="value">${escapeHtml(uiText(receipt.method))}</div></div>
+      <div class="box"><div class="label">Durum</div><div class="value">${escapeHtml(uiText(receipt.status || 'basarili'))}</div></div>
+      <div class="box"><div class="label">Kur</div><div class="value">1 USD = ${receipt.exchangeRate} TL</div></div>
+    </div>
+    <table>
+      <thead><tr><th>İşlem</th><th>TL</th><th>USD</th></tr></thead>
+      <tbody>
+        <tr><td>Tahsil edilen</td><td class="blue">${money(receipt.amountTry)}</td><td class="green">${money(receipt.amountUsd, 'USD')}</td></tr>
+        <tr><td>Bakiyeye uygulanan</td><td class="blue">${money(receipt.appliedToTlBalance ?? 0)}</td><td class="green">${money(receipt.appliedToUsdBalance ?? 0, 'USD')}</td></tr>
+        <tr><td>Açıklama</td><td colspan="2">${escapeHtml(receipt.description || '-')}</td></tr>
+      </tbody>
+    </table>
+    <div class="totals">
+      <div class="total"><div class="label">Kalan TL bakiye</div><div class="value">${money(receipt.remainingTry)}</div></div>
+      <div class="total"><div class="label">Kalan USD bakiye</div><div class="value">${money(receipt.remainingUsd, 'USD')}</div></div>
+    </div>
+    <div class="footer"><div class="sign">Tahsil eden</div><div class="sign">İmza / Kaşe</div></div>
+  </main>
+  ${autoPrint ? '<script>window.addEventListener("load", () => window.print());</script>' : ''}
+</body>
+</html>`;
+  return { fileName, html };
+}
+
+function SaleDetailModal({ sale: initialSale, products, accounts, fallbackRate, onClose, onNotice, onUpdated }: { sale: Sale; products: Product[]; accounts: Account[]; fallbackRate: number; onClose: () => void; onNotice: (message: string) => void; onUpdated?: (sale: Sale) => void | Promise<void> }) {
   const [salePdfTemplates, setSalePdfTemplates] = useState<PdfTemplate[]>([]);
   const [editOpen, setEditOpen] = useState(false);
+  const [sale, setSale] = useState(initialSale);
+  const cancelled = sale.status === 'Iptal';
   useEffect(() => {
     void apiGet<PdfTemplate[]>('/pdf-templates').then(setSalePdfTemplates).catch(() => setSalePdfTemplates([]));
   }, []);
+  useEffect(() => setSale(initialSale), [initialSale]);
   const rate = sale.exchangeRate && sale.exchangeRate > 1 ? sale.exchangeRate : fallbackRate;
   const account = accounts.find((item) => item.id === sale.accountId || item.companyName === sale.accountName);
   const accountName = sale.accountName ?? account?.companyName ?? sale.accountId;
@@ -3947,6 +4385,7 @@ function SaleDetailModal({ sale, products, accounts, fallbackRate, onClose, onNo
           .sign { height: 92px; flex: 1; border: 1px dashed #94a3b8; border-radius: 8px; padding: 10px; color: #64748b; }
           .footer { margin-top:28px; border-top:2px solid ${settings.headerColor}; padding-top:12px; color:#64748b; }
           .status { display:inline-block; border-radius:999px; background:#d7f2ea; color:#126c82; padding:5px 10px; font-weight:800; }
+          .cancelled { display:inline-block; margin: 12px 0; border: 2px solid #b9415a; color:#b9415a; border-radius:10px; padding:8px 14px; font-size:24px; font-weight:900; letter-spacing:2px; }
         </style>
       </head>
       <body>
@@ -3954,9 +4393,10 @@ function SaleDetailModal({ sale, products, accounts, fallbackRate, onClose, onNo
           <div>${logoHtml}<div class="brand">${escapeHtml(settings.companyName ?? template?.title ?? 'Bulut ERP Pro')}</div><div class="muted">${escapeHtml(settings.contactInfo ?? '')}</div></div>
           <div><strong>Satis fis no:</strong> ${escapeHtml(sale.id)}<br><strong>Tarih:</strong> ${escapeHtml(new Date(sale.createdAt).toLocaleString('tr-TR'))}</div>
         </div>
-        <h1>${escapeHtml(isNote ? 'Satış Bilgi Notu' : (template?.title ?? 'Satis Fisi'))}</h1>
+        <h1>${escapeHtml(isNote ? 'Satış Bilgi Notu' : (template?.title ?? 'Satış Fişi'))}</h1>
+        ${cancelled ? '<div class="cancelled">&#304;PTAL</div>' : ''}
         <div class="grid">
-          <div class="box"><strong>Musteri bilgileri</strong><br>${escapeHtml(accountName)}<br>${escapeHtml(account?.phone ?? account?.whatsapp ?? '')}<br>${escapeHtml(account?.address ?? '')}</div>
+          <div class="box"><strong>Müşteri bilgileri</strong><br>${escapeHtml(accountName)}<br>${escapeHtml(account?.phone ?? account?.whatsapp ?? '')}<br>${escapeHtml([account?.address, account?.district, account?.city].filter(Boolean).join(' / '))}<br>Vergi dairesi: ${escapeHtml(account?.taxOffice ?? '-')}<br>Vergi numarası: ${escapeHtml(account?.taxNumber ?? '-')}</div>
           <div class="box"><strong>Para birimi / Kur</strong><br>${sale.currency}<br>1 USD = ${escapeHtml(rate)} TL</div>
         </div>
         ${isNote ? `<div class="box"><strong>Odeme durumu</strong><br><span class="status">${remainingTry > 0 || remainingUsd > 0 ? 'Kismi / vadeli' : 'Odenmis'}</span><br>Odenen: ${escapeHtml(money(paidUsd, 'USD'))} / ${escapeHtml(money(paidTry))}<br>Kalan: ${escapeHtml(money(remainingUsd, 'USD'))} / ${escapeHtml(money(remainingTry))}</div>` : ''}
@@ -4021,7 +4461,7 @@ function SaleDetailModal({ sale, products, accounts, fallbackRate, onClose, onNo
       const pdfLink = createPreviewDocument(document.fileName, document.html);
       const message = `Sayin ${accountName},
 
-Satis fisiniz hazir.
+${cancelled ? '\u0130PTAL sat\u0131\u015f fi\u015finiz haz\u0131r.' : 'Sat\u0131\u015f fi\u015finiz haz\u0131r.'}
 Fis no: ${sale.id}
 
 Toplam:
@@ -4042,6 +4482,22 @@ Iyi calismalar.`;
       onNotice('Satis PDF olusturulamadi');
     }
   }
+  async function cancelSale() {
+    if (cancelled) {
+      onNotice('Bu satis zaten iptal edilmis');
+      return;
+    }
+    if (!window.confirm('Bu satışı iptal etmek istediğinize emin misiniz?')) return;
+    try {
+      const updated = await apiPost<Sale>(`/sales/${sale.id}/cancel`, {});
+      setSale(updated);
+      await onUpdated?.(updated);
+      onNotice('Satis iptal edildi');
+    } catch (error) {
+      console.error('Satis iptal edilemedi', error);
+      onNotice(errorMessage(error));
+    }
+  }
   return (
     <ModalFrame title={`Satis detayi - ${sale.id}`} onClose={onClose}>
       <div className="space-y-4">
@@ -4053,7 +4509,9 @@ Iyi calismalar.`;
           <Info label="Kur" value={String(rate)} />
           <Info label="Odeme turu" value={sale.paymentMethod ?? '-'} />
           <Info label="Para" value={sale.currency} />
+          <Info label="Durum" value={cancelled ? 'Iptal' : (sale.status ?? 'Aktif')} />
         </div>
+        {cancelled && <div className="rounded-2xl border border-rose/30 bg-rose/10 p-3 text-sm font-black text-rose">İPTAL EDİLMİŞ SATIŞ</div>}
         <div className="overflow-x-auto rounded border border-line dark:border-slate-700">
           <table className="w-full min-w-[620px] text-left text-sm">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-900"><tr>{['Urun', 'Adet', 'Birim USD/TL', 'KDV', 'Ara toplam USD/TL'].map((header) => <th key={header} className="px-3 py-2">{header}</th>)}</tr></thead>
@@ -4069,12 +4527,13 @@ Iyi calismalar.`;
         </div>
         {sale.description && <div className="rounded border border-line p-3 text-sm dark:border-slate-700">{sale.description}</div>}
         <div className="flex justify-end gap-2 border-t border-line pt-4 dark:border-slate-700">
-          <Button variant="soft" onClick={() => setEditOpen(true)} icon={<Edit3 size={17} />}>Duzenle</Button>
+          {!cancelled && <Button variant="soft" onClick={() => setEditOpen(true)} icon={<Edit3 size={17} />}>Duzenle</Button>}
           <Button variant="soft" onClick={openSalePdfPreview} icon={<FileDown size={17} />}>PDF fis olustur</Button>
           <Button variant="soft" onClick={openSaleInfoNotePdf} icon={<FileDown size={17} />}>Satis bilgi notu PDF</Button>
           <Button onClick={openWhatsappWithReceiptPdf} icon={<MessageCircle size={17} />}>WhatsApp gonder</Button>
+          {!cancelled && <Button variant="soft" onClick={cancelSale} icon={<Trash2 size={17} />}>Iptal Et</Button>}
         </div>
-        {editOpen && <SaleEditModal sale={sale} products={products} accounts={accounts} fallbackRate={fallbackRate} onClose={() => setEditOpen(false)} onNotice={onNotice} onSaved={async (updated) => { await onUpdated?.(updated); setEditOpen(false); }} />}
+        {editOpen && <SaleEditModal sale={sale} products={products} accounts={accounts} fallbackRate={fallbackRate} onClose={() => setEditOpen(false)} onNotice={onNotice} onSaved={async (updated) => { setSale(updated); await onUpdated?.(updated); setEditOpen(false); }} />}
       </div>
     </ModalFrame>
   );
@@ -4196,7 +4655,7 @@ function DetailTable({ title, headers, rows }: { title: string; headers: string[
   return (
     <section className="rounded border border-line bg-white shadow-panel dark:border-slate-700 dark:bg-[#17202a]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line p-4 dark:border-slate-700">
-        <h2 className="text-lg font-bold">{title}</h2>
+        <h2 className="text-lg font-bold">{uiText(title)}</h2>
         <div className="flex flex-wrap gap-2">
           <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 w-52 rounded border border-line bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900" placeholder="Bu sekmede ara" />
           <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="h-10 rounded border border-line bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-900" />
@@ -4204,20 +4663,20 @@ function DetailTable({ title, headers, rows }: { title: string; headers: string[
       </div>
       <div className="hidden md:block">
         <table className="w-full table-auto text-left text-sm">
-          <thead className="bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400"><tr>{headers.map((header) => <th key={header} className="px-4 py-3 font-semibold">{header}</th>)}</tr></thead>
+          <thead className="bg-slate-50 text-slate-500 dark:bg-slate-900 dark:text-slate-400"><tr>{headers.map((header) => <th key={header} className="px-4 py-3 font-semibold">{uiText(header)}</th>)}</tr></thead>
           <tbody>{filtered.map((row, rowIndex) => <tr key={rowIndex} onClick={row.onClick} className={`border-t border-line transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-900 ${row.onClick ? 'cursor-pointer' : ''}`}>{row.cells.map((cell, cellIndex) => <td key={cellIndex} className="px-4 py-3 align-middle">{cell}</td>)}</tr>)}</tbody>
         </table>
       </div>
       <div className="grid gap-3 p-4 md:hidden">
-        {filtered.map((row, rowIndex) => <div key={rowIndex} onClick={row.onClick} className={`rounded border border-line p-3 dark:border-slate-700 ${row.onClick ? 'cursor-pointer' : ''}`}>{row.cells.map((cell, cellIndex) => <div key={cellIndex} className="flex justify-between gap-3 py-1 text-sm"><span className="text-slate-500">{headers[cellIndex]}</span><span className="text-right font-semibold">{cell}</span></div>)}</div>)}
+        {filtered.map((row, rowIndex) => <div key={rowIndex} onClick={row.onClick} className={`rounded border border-line p-3 dark:border-slate-700 ${row.onClick ? 'cursor-pointer' : ''}`}>{row.cells.map((cell, cellIndex) => <div key={cellIndex} className="flex justify-between gap-3 py-1 text-sm"><span className="text-slate-500">{uiText(headers[cellIndex])}</span><span className="text-right font-semibold">{cell}</span></div>)}</div>)}
       </div>
-      {!filtered.length && <div className="p-6 text-sm text-slate-500">Bu sekmede kayit bulunamadi.</div>}
+      {!filtered.length && <div className="p-6 text-sm text-slate-500">{uiText('Bu sekmede kayit bulunamadi.')}</div>}
     </section>
   );
 }
 
 function Panel({ title, children, actions }: { title: string; children: ReactNode; actions?: ReactNode }) {
-  return <section className="rounded-2xl border border-white/80 bg-white/90 p-5 shadow-panel backdrop-blur transition-all duration-200 dark:border-slate-700/70 dark:bg-[#17202a]/90"><div className="mb-5 flex items-center justify-between gap-3"><h2 className="text-lg font-black tracking-tight">{title}</h2>{actions}</div>{children}</section>;
+  return <section className="rounded-2xl border border-white/80 bg-white/90 p-5 shadow-panel backdrop-blur transition-all duration-200 dark:border-slate-700/70 dark:bg-[#17202a]/90"><div className="mb-5 flex items-center justify-between gap-3"><h2 className="text-lg font-black tracking-tight">{uiText(title)}</h2>{actions}</div>{children}</section>;
 }
 
 function DataTable({ title, headers, rows, actions }: { title: string; headers: string[]; rows: ReactNode[][]; actions?: ReactNode }) {
@@ -4226,7 +4685,7 @@ function DataTable({ title, headers, rows, actions }: { title: string; headers: 
   return (
     <section className="overflow-hidden rounded-2xl border border-white/80 bg-white/90 shadow-panel backdrop-blur dark:border-slate-700/70 dark:bg-[#17202a]/90">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line/80 p-5 dark:border-slate-700/70">
-        <h1 className="text-lg font-black tracking-tight">{title}</h1>
+        <h1 className="text-lg font-black tracking-tight">{uiText(title)}</h1>
         <div className="flex flex-wrap items-center gap-2">
           <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-11 w-52 rounded-xl border border-line bg-white/90 px-3 text-sm outline-none transition focus:border-ocean focus:ring-4 focus:ring-ocean/10 dark:border-slate-700 dark:bg-slate-900/80" placeholder="Tabloda ara" />
           {actions}
@@ -4234,7 +4693,7 @@ function DataTable({ title, headers, rows, actions }: { title: string; headers: 
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] text-left text-sm">
-          <thead className="bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900/70 dark:text-slate-400"><tr>{headers.map((header) => <th key={header} className="px-5 py-4 font-bold">{header}</th>)}</tr></thead>
+          <thead className="bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900/70 dark:text-slate-400"><tr>{headers.map((header) => <th key={header} className="px-5 py-4 font-bold">{uiText(header)}</th>)}</tr></thead>
           <tbody>{filteredRows.map((row, index) => <tr key={index} className="border-t border-line/70 transition hover:bg-slate-50/90 hover:shadow-sm dark:border-slate-700/70 dark:hover:bg-slate-900/80">{row.map((cell, cellIndex) => <td key={cellIndex} className="px-5 py-4 align-middle">{cell}</td>)}</tr>)}</tbody>
         </table>
       </div>
@@ -4250,12 +4709,166 @@ function nodeText(node: ReactNode): string {
   return '';
 }
 
+function uiText(value: string) {
+  const replacements: Array<[RegExp, string]> = [
+    [/\bUrun\b/g, '\u00dcr\u00fcn'],
+    [/\burun\b/g, '\u00fcr\u00fcn'],
+    [/\bFirma adi\b/g, 'Firma ad\u0131'],
+    [/\bVade gunu\b/g, 'Vade g\u00fcn\u00fc'],
+    [/\bVergi no\b/g, 'Vergi numaras\u0131'],
+    [/\bSatis\b/g, 'Sat\u0131\u015f'],
+    [/\bsatis\b/g, 'sat\u0131\u015f'],
+    [/\bAlis\b/g, 'Al\u0131\u015f'],
+    [/\balis\b/g, 'al\u0131\u015f'],
+    [/\bOdeme\b/g, '\u00d6deme'],
+    [/\bodeme\b/g, '\u00f6deme'],
+    [/\bSiparis\b/g, 'Sipari\u015f'],
+    [/\bsiparis\b/g, 'sipari\u015f'],
+    [/\bMusteri\b/g, 'M\u00fc\u015fteri'],
+    [/\bmusteri\b/g, 'm\u00fc\u015fteri'],
+    [/\bTedarikci\b/g, 'Tedarik\u00e7i'],
+    [/\btedarikci\b/g, 'tedarik\u00e7i'],
+    [/\bKullanici\b/g, 'Kullan\u0131c\u0131'],
+    [/\bkullanici\b/g, 'kullan\u0131c\u0131'],
+    [/\bSifre\b/g, '\u015eifre'],
+    [/\bsifre\b/g, '\u015fifre'],
+    [/\bGiris\b/g, 'Giri\u015f'],
+    [/\bgiris\b/g, 'giri\u015f'],
+    [/\bCikis\b/g, '\u00c7\u0131k\u0131\u015f'],
+    [/\bcikis\b/g, '\u00e7\u0131k\u0131\u015f'],
+    [/\bDuzenle\b/g, 'D\u00fczenle'],
+    [/\bduzenle\b/g, 'd\u00fczenle'],
+    [/\bGuncelle\b/g, 'G\u00fcncelle'],
+    [/\bguncelle\b/g, 'g\u00fcncelle'],
+    [/\bGonder\b/g, 'G\u00f6nder'],
+    [/\bgonder\b/g, 'g\u00f6nder'],
+    [/\bKayit\b/g, 'Kay\u0131t'],
+    [/\bkayit\b/g, 'kay\u0131t'],
+    [/\bYukleniyor\b/g, 'Y\u00fckleniyor'],
+    [/\bVazgec\b/g, 'Vazge\u00e7'],
+    [/\bIptal\b/g, '\u0130ptal'],
+    [/\bIslem\b/g, '\u0130\u015flem'],
+    [/\bislem\b/g, 'i\u015flem'],
+    [/\bIskonto\b/g, '\u0130skonto'],
+    [/\bGorsel\b/g, 'G\u00f6rsel'],
+    [/\bOnizle\b/g, '\u00d6nizle'],
+    [/\bOzet\b/g, '\u00d6zet'],
+    [/\bozet\b/g, '\u00f6zet'],
+    [/\bKarsilik\b/g, 'Kar\u015f\u0131l\u0131k'],
+    [/\bkarsiligi\b/g, 'kar\u015f\u0131l\u0131\u011f\u0131'],
+    [/\bBorc\b/g, 'Bor\u00e7'],
+    [/\bborc\b/g, 'bor\u00e7'],
+    [/\bBaslik\b/g, 'Ba\u015fl\u0131k'],
+    [/\bBasarili\b/g, 'Ba\u015far\u0131l\u0131'],
+    [/\bbasarili\b/g, 'ba\u015far\u0131l\u0131'],
+    [/\bbasarisiz\b/g, 'ba\u015far\u0131s\u0131z'],
+    [/\bBaglanti\b/g, 'Ba\u011flant\u0131'],
+    [/\bbaglantisi\b/g, 'ba\u011flant\u0131s\u0131'],
+    [/\bbaglant\u0131si\b/g, 'ba\u011flant\u0131s\u0131'],
+    [/\bSablon\b/g, '\u015eablon'],
+    [/\bsablon\b/g, '\u015fablon'],
+    [/\bOlustur\b/g, 'Olu\u015ftur'],
+    [/\bolustur\b/g, 'olu\u015ftur'],
+    [/\bDonustur\b/g, 'D\u00f6n\u00fc\u015ft\u00fcr'],
+    [/\bdonustur\b/g, 'd\u00f6n\u00fc\u015ft\u00fcr'],
+    [/\bGecmis\b/g, 'Ge\u00e7mi\u015f'],
+    [/\bgecmis\b/g, 'ge\u00e7mi\u015f'],
+    [/\bGec\b/g, 'Ge\u00e7'],
+    [/\bgecti\b/g, 'ge\u00e7ti'],
+    [/\bSuresi\b/g, 'S\u00fcresi'],
+    [/\bKismi\b/g, 'K\u0131smi'],
+    [/\bOdenen\b/g, '\u00d6denen'],
+    [/\bOdendi\b/g, '\u00d6dendi'],
+    [/\bOdenmis\b/g, '\u00d6denmi\u015f'],
+    [/\bAciklama\b/g, 'A\u00e7\u0131klama'],
+    [/\baciklama\b/g, 'a\u00e7\u0131klama'],
+    [/\bFis\b/g, 'Fi\u015f'],
+    [/\bfis\b/g, 'fi\u015f'],
+    [/\bYontem\b/g, 'Y\u00f6ntem'],
+    [/\byontem\b/g, 'y\u00f6ntem'],
+    [/\bTumu\b/g, 'T\u00fcm\u00fc'],
+    [/\bHazirlaniyor\b/g, 'Haz\u0131rlan\u0131yor'],
+    [/\bOnaylandi\b/g, 'Onayland\u0131'],
+    [/\bReddedildi\b/g, 'Reddedildi'],
+    [/\bGonderildi\b/g, 'G\u00f6nderildi'],
+    [/\bGoruntuledi\b/g, 'G\u00f6r\u00fcnt\u00fcledi'],
+    [/\bgoruntuledi\b/g, 'g\u00f6r\u00fcnt\u00fcledi'],
+    [/\bSec\b/g, 'Se\u00e7'],
+    [/\bsec\b/g, 'se\u00e7'],
+    [/\bGuvenli\b/g, 'G\u00fcvenli'],
+    [/\bguvenli\b/g, 'g\u00fcvenli'],
+    [/\bYazdir\b/g, 'Yazd\u0131r'],
+    [/\byazdir\b/g, 'yazd\u0131r'],
+    [/\bSuccess\b/g, 'Ba\u015far\u0131l\u0131'],
+    [/\bsuccess\b/g, 'ba\u015far\u0131l\u0131'],
+    [/\bTemplate\b/g, '\u015eablon'],
+    [/\btemplate\b/g, '\u015fablon'],
+    [/\bMessage\b/g, 'Mesaj'],
+    [/\bmessage\b/g, 'mesaj'],
+    [/\bPreview\b/g, '\u00d6nizleme'],
+    [/\bpreview\b/g, '\u00f6nizleme'],
+    [/\bCreate\b/g, 'Olu\u015ftur'],
+    [/\bcreate\b/g, 'olu\u015ftur'],
+    [/\bDetail\b/g, 'Detay'],
+    [/\bdetail\b/g, 'detay'],
+    [/\bConvert to Sale\b/g, 'Sat\u0131\u015fa d\u00f6n\u00fc\u015ft\u00fcr'],
+    [/\bDraft\b/g, 'Taslak'],
+    [/\bdraft\b/g, 'taslak'],
+    [/\bCreated\b/g, 'Olu\u015fturuldu'],
+    [/\bcreated\b/g, 'olu\u015fturuldu'],
+    [/\bCustomer\b/g, 'M\u00fc\u015fteri'],
+    [/\bcustomer\b/g, 'm\u00fc\u015fteri'],
+    [/\bCompany\b/g, 'Firma'],
+    [/\bcompany\b/g, 'firma'],
+    [/\bStatus\b/g, 'Durum'],
+    [/\bstatus\b/g, 'durum'],
+    [/\bDashboard\b/g, 'G\u00f6sterge paneli'],
+    [/\bdashboard\b/g, 'g\u00f6sterge paneli'],
+    [/\bUsers\b/g, 'Kullan\u0131c\u0131lar'],
+    [/\busers\b/g, 'kullan\u0131c\u0131lar'],
+    [/\bSettings\b/g, 'Ayarlar'],
+    [/\bsettings\b/g, 'ayarlar'],
+    [/\bFailed\b/g, 'Ba\u015far\u0131s\u0131z'],
+    [/\bfailed\b/g, 'ba\u015far\u0131s\u0131z'],
+    [/\bPending\b/g, 'Beklemede'],
+    [/\bpending\b/g, 'beklemede'],
+    [/\bActive\b/g, 'Aktif'],
+    [/\bactive\b/g, 'aktif'],
+    [/\bPassive\b/g, 'Pasif'],
+    [/\bpassive\b/g, 'pasif'],
+    [/\bDelete\b/g, 'Sil'],
+    [/\bdelete\b/g, 'sil'],
+    [/\bEdit\b/g, 'D\u00fczenle'],
+    [/\bedit\b/g, 'd\u00fczenle'],
+    [/\bSave\b/g, 'Kaydet'],
+    [/\bsave\b/g, 'kaydet'],
+    [/\bCancel\b/g, '\u0130ptal'],
+    [/\bcancel\b/g, 'iptal'],
+    [/\bLoading\b/g, 'Y\u00fckleniyor'],
+    [/\bloading\b/g, 'y\u00fckleniyor'],
+    [/\bError\b/g, 'Hata'],
+    [/\berror\b/g, 'hata'],
+    [/\bAcik\b/g, 'A\u00e7\u0131k'],
+    [/\bKapandi\b/g, 'Kapand\u0131'],
+    [/\bKasa\b/g, 'Kasa'],
+    [/\bKapat\b/g, 'Kapat'],
+  ];
+  return replacements.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), value);
+}
+
+function uiNode(node: ReactNode): ReactNode {
+  if (typeof node === 'string') return uiText(node);
+  if (Array.isArray(node)) return node.map((child, index) => <Fragment key={index}>{uiNode(child)}</Fragment>);
+  return node;
+}
+
 function Button({ children, onClick, icon, variant = 'primary', disabled, className = '' }: { children: ReactNode; onClick?: () => void; icon?: ReactNode; variant?: 'primary' | 'soft'; disabled?: boolean; className?: string }) {
-  return <button type="button" disabled={disabled} onClick={onClick} className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl px-3.5 text-sm font-bold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 ${variant === 'primary' ? 'bg-ocean text-white shadow-sm shadow-ocean/15 hover:-translate-y-0.5 hover:bg-[#0e5c70] hover:shadow-lg hover:shadow-ocean/20' : 'border border-line bg-white/90 text-ocean shadow-sm hover:-translate-y-0.5 hover:bg-mint dark:border-slate-700 dark:bg-slate-900/80'} ${className}`}>{icon}{children}</button>;
+  return <button type="button" disabled={disabled} onClick={onClick} className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl px-3.5 text-sm font-bold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 ${variant === 'primary' ? 'bg-ocean text-white shadow-sm shadow-ocean/15 hover:-translate-y-0.5 hover:bg-[#0e5c70] hover:shadow-lg hover:shadow-ocean/20' : 'border border-line bg-white/90 text-ocean shadow-sm hover:-translate-y-0.5 hover:bg-mint dark:border-slate-700 dark:bg-slate-900/80'} ${className}`}>{icon}{uiNode(children)}</button>;
 }
 
 function IconButton({ children, title, onClick }: { children: ReactNode; title: string; onClick?: () => void }) {
-  return <button type="button" title={title} aria-label={title} onClick={onClick} className="grid h-10 w-10 place-items-center rounded-xl border border-line bg-white/90 text-slate-600 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-ocean hover:bg-mint hover:text-ocean dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-300">{children}</button>;
+  const translatedTitle = uiText(title);
+  return <button type="button" title={translatedTitle} aria-label={translatedTitle} onClick={onClick} className="grid h-10 w-10 place-items-center rounded-xl border border-line bg-white/90 text-slate-600 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-ocean hover:bg-mint hover:text-ocean dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-300">{children}</button>;
 }
 
 function Toolbar({ children }: { children: ReactNode }) {
@@ -4263,7 +4876,7 @@ function Toolbar({ children }: { children: ReactNode }) {
 }
 
 function Badge({ children }: { children: ReactNode }) {
-  return <span className="rounded bg-mint px-2 py-1 text-xs font-semibold text-ocean">{children}</span>;
+  return <span className="rounded bg-mint px-2 py-1 text-xs font-semibold text-ocean">{uiNode(children)}</span>;
 }
 
 function ProductThumb({ product }: { product: Partial<Product> }) {
@@ -4300,7 +4913,7 @@ function SalesProductImage({ product, compact = false }: { product: Partial<Prod
 }
 
 function ModalFrame({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
-  return <div className="fixed inset-0 z-40 grid place-items-center bg-black/35 p-4"><section className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded border border-line bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-[#17202a]"><div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-bold">{title}</h2><IconButton title="Kapat" onClick={onClose}><X size={18} /></IconButton></div>{children}</section></div>;
+  return <div className="fixed inset-0 z-40 grid place-items-center bg-black/35 p-4"><section className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded border border-line bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-[#17202a]"><div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-bold">{uiText(title)}</h2><IconButton title="Kapat" onClick={onClose}><X size={18} /></IconButton></div>{children}</section></div>;
 }
 
 function FormGrid({ children }: { children: ReactNode }) {
@@ -4308,7 +4921,11 @@ function FormGrid({ children }: { children: ReactNode }) {
 }
 
 function FormInput({ label, value, onChange, type = 'text' }: { label: string; value?: string; onChange: (value: string) => void; type?: string }) {
-  return <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">{label}<input type={type} value={value ?? ''} onChange={(event) => onChange(event.target.value)} className="mt-1.5 h-11 w-full rounded-xl border border-line bg-white/90 px-3 text-ink outline-none focus:border-ocean focus:ring-4 focus:ring-ocean/10 dark:border-slate-700 dark:bg-slate-900/80 dark:text-white" /></label>;
+  return <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">{uiText(label)}<input type={type} value={value ?? ''} onChange={(event) => onChange(event.target.value)} className="mt-1.5 h-11 w-full rounded-xl border border-line bg-white/90 px-3 text-ink outline-none focus:border-ocean focus:ring-4 focus:ring-ocean/10 dark:border-slate-700 dark:bg-slate-900/80 dark:text-white" /></label>;
+}
+
+function FormTextarea({ label, value, onChange }: { label: string; value?: string; onChange: (value: string) => void }) {
+  return <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">{uiText(label)}<textarea value={value ?? ''} onChange={(event) => onChange(event.target.value)} className="mt-1.5 min-h-24 w-full resize-y rounded-xl border border-line bg-white/90 px-3 py-2 text-ink outline-none focus:border-ocean focus:ring-4 focus:ring-ocean/10 dark:border-slate-700 dark:bg-slate-900/80 dark:text-white" /></label>;
 }
 
 function FormNumber({ label, value, setValue }: { label: string; value: number; setValue: (value: number) => void }) {
@@ -4317,11 +4934,11 @@ function FormNumber({ label, value, setValue }: { label: string; value: number; 
   useEffect(() => {
     if (!focused) setText(String(value ?? 0));
   }, [value, focused]);
-  return <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">{label}<input type="text" inputMode="decimal" step="0.01" value={text} onFocus={() => setFocused(true)} onBlur={() => { setFocused(false); setText(String(positiveNumber(text))); }} onChange={(event) => { const normalized = event.target.value.replace(',', '.'); setText(normalized); setValue(positiveNumber(normalized)); }} className="mt-1.5 h-11 w-full rounded-xl border border-line bg-white/90 px-3 text-ink outline-none focus:border-ocean focus:ring-4 focus:ring-ocean/10 dark:border-slate-700 dark:bg-slate-900/80 dark:text-white" /></label>;
+  return <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">{uiText(label)}<input type="text" inputMode="decimal" step="0.01" value={text} onFocus={() => setFocused(true)} onBlur={() => { setFocused(false); setText(String(positiveNumber(text))); }} onChange={(event) => { const normalized = event.target.value.replace(',', '.'); setText(normalized); setValue(positiveNumber(normalized)); }} className="mt-1.5 h-11 w-full rounded-xl border border-line bg-white/90 px-3 text-ink outline-none focus:border-ocean focus:ring-4 focus:ring-ocean/10 dark:border-slate-700 dark:bg-slate-900/80 dark:text-white" /></label>;
 }
 
 function FormSelect({ label, value, options, onChange }: { label: string; value: string; options: { label: string; value: string }[]; onChange: (value: string) => void }) {
-  return <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">{label}<select value={value} onChange={(event) => onChange(event.target.value)} className="mt-1.5 h-11 w-full rounded-xl border border-line bg-white/90 px-3 text-ink outline-none focus:border-ocean focus:ring-4 focus:ring-ocean/10 dark:border-slate-700 dark:bg-slate-900/80 dark:text-white">{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+  return <label className="text-sm font-semibold text-slate-600 dark:text-slate-300">{uiText(label)}<select value={value} onChange={(event) => onChange(event.target.value)} className="mt-1.5 h-11 w-full rounded-xl border border-line bg-white/90 px-3 text-ink outline-none focus:border-ocean focus:ring-4 focus:ring-ocean/10 dark:border-slate-700 dark:bg-slate-900/80 dark:text-white">{options.map((option) => <option key={option.value} value={option.value}>{uiText(option.label)}</option>)}</select></label>;
 }
 
 function Segment({ value, setValue }: { value: 'TRY' | 'USD'; setValue: (value: 'TRY' | 'USD') => void }) {
@@ -4329,7 +4946,7 @@ function Segment({ value, setValue }: { value: 'TRY' | 'USD'; setValue: (value: 
 }
 
 function Summary({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
-  return <div className={`flex items-center justify-between ${strong ? 'text-lg font-bold' : 'text-sm'}`}><span className="text-slate-500 dark:text-slate-400">{label}</span><span>{value}</span></div>;
+  return <div className={`flex items-center justify-between ${strong ? 'text-lg font-bold' : 'text-sm'}`}><span className="text-slate-500 dark:text-slate-400">{uiText(label)}</span><span>{value}</span></div>;
 }
 
 function LoginPage({ mode = 'any', onLogin }: { mode?: 'any' | 'admin' | 'portal'; onLogin: (token: string, user: UserSession) => void }) {
@@ -4398,14 +5015,14 @@ function LoginPage({ mode = 'any', onLogin }: { mode?: 'any' | 'admin' | 'portal
         </div>
         <div className="p-7">
           <div className="grid h-12 w-12 place-items-center rounded-2xl bg-mint text-ocean"><UserRound /></div>
-          <h2 className="mt-5 text-2xl font-black">Giris yap</h2>
-          <p className="mt-1 text-sm font-semibold text-slate-500">{message}</p>
+          <h2 className="mt-5 text-2xl font-black">Giriş yap</h2>
+          <p className="mt-1 text-sm font-semibold text-slate-500">{uiText(message)}</p>
           {!session ? (
             <div className="mt-6 space-y-4">
               <FormInput label="Kullanici adi veya e-posta" value={form.email} onChange={(email) => setForm({ ...form, email })} />
               <FormInput label="Sifre" type="password" value={form.password} onChange={(password) => setForm({ ...form, password })} />
               <Button onClick={login} icon={<UserRound size={17} />}>Giris yap</Button>
-              <button type="button" onClick={forgotPassword} className="text-sm font-bold text-ocean hover:underline">Sifremi unuttum</button>
+              <button type="button" onClick={forgotPassword} className="text-sm font-bold text-ocean hover:underline">Şifremi unuttum</button>
             </div>
           ) : (
             <div className="mt-6 space-y-4">
@@ -4422,16 +5039,16 @@ function LoginPage({ mode = 'any', onLogin }: { mode?: 'any' | 'admin' | 'portal
 function DualSummary({ label, tryValue, usdValue, strong }: { label: string; tryValue: number; usdValue: number; strong?: boolean }) {
   return (
     <div className={`rounded-2xl border border-line p-3 shadow-sm dark:border-slate-700 ${strong ? 'bg-slate-50 dark:bg-slate-900' : 'bg-white/60 dark:bg-slate-900/40'}`}>
-      <div className="mb-2 text-sm font-semibold text-slate-500 dark:text-slate-400">{label}</div>
+      <div className="mb-2 text-sm font-semibold text-slate-500 dark:text-slate-400">{uiText(label)}</div>
       <DualMoney tryValue={tryValue} usdValue={usdValue} compact />
     </div>
   );
 }
 
 function InfoCard({ label, value, icon }: { label: string; value: string; icon?: ReactNode }) {
-  return <div className="rounded-2xl border border-white/80 bg-white/90 p-4 shadow-panel transition hover:-translate-y-1 hover:shadow-lift dark:border-slate-700/70 dark:bg-[#17202a]/90"><div className="flex items-center justify-between gap-3"><div className="text-sm font-semibold text-slate-500 dark:text-slate-400">{label}</div>{icon && <span className="grid h-10 w-10 place-items-center rounded-2xl bg-mint text-ocean">{icon}</span>}</div><div className="mt-2 text-lg font-black">{value}</div></div>;
+  return <div className="rounded-2xl border border-white/80 bg-white/90 p-4 shadow-panel transition hover:-translate-y-1 hover:shadow-lift dark:border-slate-700/70 dark:bg-[#17202a]/90"><div className="flex items-center justify-between gap-3"><div className="text-sm font-semibold text-slate-500 dark:text-slate-400">{uiText(label)}</div>{icon && <span className="grid h-10 w-10 place-items-center rounded-2xl bg-mint text-ocean">{icon}</span>}</div><div className="mt-2 text-lg font-black">{value}</div></div>;
 }
 
 function Info({ label, value }: { label: string; value: string }) {
-  return <div className="flex items-center justify-between gap-3 text-sm"><span className="text-slate-500 dark:text-slate-400">{label}</span><span className="text-right font-semibold">{value}</span></div>;
+  return <div className="flex items-center justify-between gap-3 text-sm"><span className="text-slate-500 dark:text-slate-400">{uiText(label)}</span><span className="text-right font-semibold">{value}</span></div>;
 }

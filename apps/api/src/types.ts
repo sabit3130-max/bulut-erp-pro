@@ -28,6 +28,8 @@ export interface Account {
   taxOffice: string;
   taxNumber: string;
   address: string;
+  city?: string;
+  district?: string;
   balanceTry: number;
   balanceUsd: number;
   riskLimit: number;
@@ -94,6 +96,7 @@ export interface Sale {
   exchangeRate?: number;
   paymentMethod?: string;
   description?: string;
+  status?: 'Aktif' | 'Iptal';
   subtotal: number;
   vat: number;
   discount: number;
@@ -290,6 +293,7 @@ export interface PdfTemplate {
 export interface MessageTemplate {
   id: string;
   type: 'WhatsAppSatis' | 'BorcHatirlatma' | 'Tahsilat' | 'SiparisDurumu' | 'Teklif' | 'Mail';
+  channel?: 'WhatsApp' | 'SMS' | 'E-posta';
   name: string;
   body: string;
   default: boolean;

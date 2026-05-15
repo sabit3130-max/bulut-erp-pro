@@ -51,6 +51,8 @@ AUTO_BACKUP_INTERVAL_HOURS=24
 
 `JWT_SECRET` production ortaminda mutlaka guclu ve gizli bir deger olmalidir.
 
+`NODE_ENV=production` iken `ERP_STORE_PATH` zorunludur. Backend bu degisken tanimli degilse bilerek baslamaz. Bu kilit, deploy/redeploy sirasinda Docker image icindeki bos `data/erp-store.json` dosyasina gecip canli veriyi sessizce ezmeyi engeller. Coolify/VPS uzerinde `/app/data` gibi kalici volume baglayin ve `ERP_STORE_PATH=/app/data/erp-store.json` olarak ayarlayin.
+
 ## Kullanici Girisleri
 
 Canli sistemde varsayilan demo veri olusturulmaz. Sistemde hic `ADMIN` kullanici yoksa varsayilan admin otomatik olusturulur: `admin@buluterp.local` / `Admin123!`. Sifre hashli saklanir ve ilk giriste sifre degistirme zorunludur. Ortam degiskenleriyle farkli ilk admin bilgisi verebilirsiniz.
@@ -76,9 +78,11 @@ Gelistirme ve tek sunucu kullaniminda veriler:
 data/erp-store.json
 ```
 
-dosyasina yazilir. Uygulama kapanip acildiginda cari, urun, satis, alis, tahsilat, teklif, kategori, siparis ve odeme bildirimleri korunur. Store dosyasi yoksa sistem bos baslar; otomatik demo veri olusturulmaz.
+dosyasina yazilir. Uygulama kapanip acildiginda cari, urun, satis, alis, tahsilat, teklif, kategori, siparis ve odeme bildirimleri korunur. Store dosyasi yoksa sistem bos baslar; otomatik demo veri olusturulmaz. Production ortaminda store yolu mutlaka kalici volume uzerinde olmalidir.
 
 Canli deploy image icinde `data/erp-store.json` tutulmaz. VPS/Coolify uzerinde `ERP_STORE_PATH` icin kalici volume baglayin. Boylece redeploy/restart sirasinda repo veya Docker image icindeki dosya canli veriyi overwrite edemez.
+
+Her veri yazimindan once mevcut store dosyasinin bir kopyasi `write-backups` klasorune alinir ve asil dosya atomik temp dosya ile degistirilir. Bu, yarim yazim veya hatali deploy aninda mevcut store dosyasinin korunmasina yardim eder.
 
 `NODE_ENV=production` iken JSON yedek importu varsayilan olarak kapali gelir. Geri yukleme yapilacaksa once sunucu yedegi alin, sonra sadece kontrollu bakim penceresinde `ALLOW_DATA_IMPORT=true` kullanin.
 

@@ -1,8 +1,8 @@
 import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { compareSync, hashSync } from 'bcryptjs';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { Account, Category, Collection, Currency, MessageTemplate, Order, PaymentLog, PdfTemplate, Product, Purchase, Quote, Sale, SupplierPayment, TransactionItem, User } from './types';
 
 @Injectable()
@@ -26,6 +26,7 @@ export class DataService {
   private orders: Order[] = [];
 
   constructor(private readonly jwt: JwtService) {
+    this.assertProductionStoreSafety();
     this.loadFromDisk();
     this.bootstrapAdminFromEnv();
     this.setupAutoBackup();
@@ -55,9 +56,10 @@ export class DataService {
 
   dashboard() {
     const today = new Date().toISOString().slice(0, 10);
-    const totalRevenue = this.sales.reduce((sum, sale) => sum + this.toTry(sale.total, sale.currency), 0);
+    const activeSales = this.sales.filter((sale) => sale.status !== 'Iptal');
+    const totalRevenue = activeSales.reduce((sum, sale) => sum + this.toTry(sale.total, sale.currency), 0);
     const totalCollected = this.collections.filter((item) => item.status !== 'basarisiz').reduce((sum, item) => sum + this.toTry(item.amount, item.currency), 0);
-    const dailySales = this.sales.filter((sale) => sale.createdAt.startsWith(today)).reduce((sum, sale) => sum + this.toTry(sale.total, sale.currency), 0);
+    const dailySales = activeSales.filter((sale) => sale.createdAt.startsWith(today)).reduce((sum, sale) => sum + this.toTry(sale.total, sale.currency), 0);
     return {
       usdRate: this.usdRate,
       usdRateUpdatedAt: this.usdRateUpdatedAt,
@@ -239,15 +241,32 @@ export class DataService {
     return { usdTry: this.usdRate, updatedAt: this.usdRateUpdatedAt, source };
   }
 
-  listAccounts() {
-    return this.accounts.map((account) => this.enrichAccount(account));
+  listAccounts(query = '') {
+    const needle = this.normalizeSearch(query);
+    return this.accounts
+      .filter((account) => {
+        if (!needle) return true;
+        return [
+          account.companyName,
+          account.code,
+          account.phone,
+          account.whatsapp,
+          account.email,
+          account.contactName,
+          account.taxNumber,
+          account.taxOffice,
+        ].some((value) => this.normalizeSearch(value).includes(needle));
+      })
+      .map((account) => this.enrichAccount(account));
   }
 
   createAccount(input: Partial<Account> & Record<string, unknown>) {
     const type = input.type ?? 'MUSTERI';
-    const code = String(input.code ?? '').trim() || this.generateAccountCode(type);
+    const requestedCode = String(input.code ?? '').trim();
+    const autoCode = input.autoCode === true || !requestedCode;
+    const code = autoCode ? this.generateAccountCode(type) : requestedCode;
     this.validateAccount({ ...input, type, code });
-    if (this.accounts.some((item) => item.code.toLocaleLowerCase('tr-TR') === code.toLocaleLowerCase('tr-TR'))) throw new BadRequestException('Cari kodu zaten kullaniliyor');
+    if (this.accounts.some((item) => item.code.toLocaleLowerCase('tr-TR') === code.toLocaleLowerCase('tr-TR'))) throw new BadRequestException('Bu cari kodu zaten kullaniliyor.');
     const account: Account = {
       id: this.nextId('a', this.accounts),
       code,
@@ -260,6 +279,8 @@ export class DataService {
       taxOffice: input.taxOffice || '',
       taxNumber: input.taxNumber || '',
       address: input.address || '',
+      city: String(input.city ?? ''),
+      district: String(input.district ?? ''),
       balanceTry: Number(input.balanceTry ?? 0),
       balanceUsd: Number(input.balanceUsd ?? 0),
       riskLimit: Number(input.riskLimit ?? 0),
@@ -273,9 +294,11 @@ export class DataService {
 
   updateAccount(id: string, input: Partial<Account>) {
     const account = this.findAccount(id);
-    if (input.code && this.accounts.some((item) => item.id !== id && item.code === input.code)) throw new BadRequestException('Cari kodu zaten kullaniliyor');
+    const nextCode = String(input.code ?? '').trim();
+    if (nextCode && this.accounts.some((item) => item.id !== id && item.code.toLocaleLowerCase('tr-TR') === nextCode.toLocaleLowerCase('tr-TR'))) throw new BadRequestException('Bu cari kodu zaten kullaniliyor.');
     Object.assign(account, {
       ...input,
+      code: nextCode || account.code,
       balanceTry: input.balanceTry === undefined ? account.balanceTry : Number(input.balanceTry),
       balanceUsd: input.balanceUsd === undefined ? account.balanceUsd : Number(input.balanceUsd),
       riskLimit: input.riskLimit === undefined ? account.riskLimit : Number(input.riskLimit),
@@ -307,13 +330,14 @@ export class DataService {
     const ledger = [
       ...sales.map((sale) => {
         const totals = this.saleDualTotals(sale);
+        const cancelled = sale.status === 'Iptal';
         return {
           id: sale.id,
           date: sale.createdAt,
-          type: 'Satis',
-          description: `Satis fisi ${sale.id}`,
-          debitTry: totals.totalTry,
-          debitUsd: totals.totalUsd,
+          type: cancelled ? 'Satis iptal edildi' : 'Satis',
+          description: cancelled ? `Satis fisi ${sale.id} iptal edildi` : `Satis fisi ${sale.id}`,
+          debitTry: cancelled ? 0 : totals.totalTry,
+          debitUsd: cancelled ? 0 : totals.totalUsd,
           creditTry: 0,
           creditUsd: 0,
         };
@@ -358,7 +382,8 @@ export class DataService {
 
   listCategories() {
     return this.categories.map((category) => {
-      const products = this.products.filter((product) => product.category === category.name || product.subCategory === category.name);
+      const categoryNames = this.categoryNameTree(category);
+      const products = this.products.filter((product) => categoryNames.has(product.category) || (product.subCategory ? categoryNames.has(product.subCategory) : false));
       return {
         ...category,
         productCount: products.length,
@@ -412,6 +437,7 @@ export class DataService {
 
   deleteCategory(id: string) {
     const category = this.findCategory(id);
+    if (this.categories.some((item) => item.parentId === id)) throw new BadRequestException('Bu kategorinin alt kategorileri var. Once alt kategorileri tasiyin veya pasife alin.');
     if (this.products.some((product) => product.category === category.name || product.subCategory === category.name)) throw new BadRequestException('Bu kategoride urun var');
     this.categories = this.categories.filter((item) => item.id !== id);
     this.persist();
@@ -517,8 +543,9 @@ export class DataService {
   listOrders() {
     return this.orders.map((order) => {
       const account = this.findAccount(order.accountId);
+      const enriched = this.enrichOrderPrices(order);
       return {
-        ...order,
+        ...enriched,
         accountName: account.companyName,
         dealerName: order.dealerName ?? account.companyName,
         phone: order.phone ?? account.phone ?? account.whatsapp,
@@ -590,6 +617,7 @@ export class DataService {
       exchangeRate: this.usdRate,
       paymentMethod: input.paymentMethod ?? 'Vadeli',
       description: '',
+      status: 'Aktif',
       subtotal,
       vat,
       discount,
@@ -631,6 +659,7 @@ export class DataService {
   updateSale(id: string, input: { accountId?: string; items?: { productId: string; quantity: number; unitPrice?: number; unitPriceTry?: number; unitPriceUsd?: number; vatRate?: number }[]; currency?: Currency; paid?: number; discount?: number; date?: string; paymentMethod?: Collection['method'] | 'Vadeli'; description?: string }) {
     const sale = this.sales.find((item) => item.id === id);
     if (!sale) throw new NotFoundException('Satis kaydi bulunamadi');
+    if (sale.status === 'Iptal') throw new BadRequestException('Iptal edilmis satis duzenlenemez');
     const previousAccount = this.findAccount(sale.accountId);
     const account = this.findAccount(input.accountId ?? sale.accountId);
     const currency = input.currency ?? sale.currency;
@@ -685,6 +714,23 @@ export class DataService {
     });
     if (currency === 'USD') account.balanceUsd += sale.remaining;
     else account.balanceTry += sale.remaining;
+    this.persist();
+    return this.enrichSale(sale);
+  }
+
+  cancelSale(id: string) {
+    const sale = this.sales.find((item) => item.id === id);
+    if (!sale) throw new NotFoundException('Satis kaydi bulunamadi');
+    if (sale.status === 'Iptal') throw new BadRequestException('Bu satis zaten iptal edilmis');
+    const account = this.findAccount(sale.accountId);
+    (sale.items ?? []).forEach((item) => {
+      const product = this.products.find((candidate) => candidate.id === item.productId);
+      if (product) product.stock += item.quantity;
+    });
+    if (sale.currency === 'USD') account.balanceUsd = this.round(account.balanceUsd - sale.remaining);
+    else account.balanceTry = this.round(account.balanceTry - sale.remaining);
+    sale.status = 'Iptal';
+    sale.description = [sale.description, `Satis iptal edildi: ${new Date().toLocaleString('tr-TR')}`].filter(Boolean).join('\n');
     this.persist();
     return this.enrichSale(sale);
   }
@@ -989,7 +1035,7 @@ export class DataService {
 
   createMessageTemplate(input: Partial<MessageTemplate>) {
     if (!input.name || !input.body || !input.type) throw new BadRequestException('Sablon adi, turu ve metni zorunlu');
-    const template: MessageTemplate = { id: this.nextId('mt', this.messageTemplates), type: input.type, name: input.name, body: input.body, default: false, active: true };
+    const template: MessageTemplate = { id: this.nextId('mt', this.messageTemplates), type: input.type, channel: input.channel ?? 'WhatsApp', name: input.name, body: input.body, default: Boolean(input.default), active: input.active ?? true };
     this.messageTemplates.unshift(template);
     this.persist();
     return template;
@@ -1004,6 +1050,14 @@ export class DataService {
     return template;
   }
 
+  deleteMessageTemplate(id: string) {
+    const exists = this.messageTemplates.some((item) => item.id === id);
+    if (!exists) throw new NotFoundException('Mesaj sablonu bulunamadi');
+    this.messageTemplates = this.messageTemplates.filter((item) => item.id !== id);
+    this.persist();
+    return { deleted: true };
+  }
+
   createOrder(input: { accountId: string; items: { productId: string; quantity: number }[]; currency?: Currency; userId?: string; description?: string }) {
     const account = this.findAccount(input.accountId);
     if (!input.items?.length) throw new BadRequestException('Urun secmeden siparis olusturulamaz');
@@ -1015,17 +1069,19 @@ export class DataService {
       if (product.stock < quantity) throw new BadRequestException(`${product.name} icin stok yetersiz`);
       return { product, quantity };
     });
-    const totalTry = lines.reduce((sum, item) => sum + item.product.dealerTry * item.quantity, 0);
-    const totalUsd = lines.reduce((sum, item) => sum + item.product.dealerUsd * item.quantity, 0);
+    const dealerPrice = (product: Product) => this.productDealerPrice(product);
+    const totalTry = lines.reduce((sum, item) => sum + dealerPrice(item.product).tryValue * item.quantity, 0);
+    const totalUsd = lines.reduce((sum, item) => sum + dealerPrice(item.product).usdValue * item.quantity, 0);
     const user = input.userId ? this.users.find((item) => item.id === input.userId) : undefined;
     const orderItems = this.makeTransactionItems(input.items, input.currency ?? 'TRY', 'sale', false).map((item) => {
       const product = this.findProduct(item.productId);
+      const price = dealerPrice(product);
       return {
         ...item,
-        unitPriceTry: product.dealerTry,
-        unitPriceUsd: product.dealerUsd,
-        lineTotalTry: product.dealerTry * item.quantity,
-        lineTotalUsd: product.dealerUsd * item.quantity,
+        unitPriceTry: price.tryValue,
+        unitPriceUsd: price.usdValue,
+        lineTotalTry: price.tryValue * item.quantity,
+        lineTotalUsd: price.usdValue * item.quantity,
       };
     });
     const order: Order = {
@@ -1054,13 +1110,14 @@ export class DataService {
     if (!order) throw new NotFoundException('Siparis bulunamadi');
     if (order.status === 'Onaylandi') throw new BadRequestException('Siparis zaten onaylanmis');
     if (order.status === 'Iptal edildi') throw new BadRequestException('Iptal edilen siparis onaylanamaz');
+    const pricedOrder = this.enrichOrderPrices(order);
     const sale = this.createSale({
       accountId: order.accountId,
-      currency: order.totalUsd > 0 ? 'USD' : 'TRY',
+      currency: pricedOrder.totalUsd > 0 ? 'USD' : 'TRY',
       discount: 0,
       paid: 0,
       paymentMethod: 'Vadeli',
-      items: (order.items ?? []).map((item) => ({
+      items: (pricedOrder.items ?? []).map((item) => ({
         productId: item.productId,
         quantity: item.quantity,
         unitPriceTry: item.unitPriceTry,
@@ -1201,6 +1258,12 @@ export class DataService {
       receiptNo: collection.receiptNo || `MKB-${collection.id.toUpperCase()}`,
       account: account.companyName,
       accountCode: account.code,
+      accountPhone: account.phone,
+      accountTaxOffice: account.taxOffice,
+      accountTaxNumber: account.taxNumber,
+      accountAddress: account.address,
+      accountCity: account.city,
+      accountDistrict: account.district,
       method: collection.method,
       amount: collection.amount,
       amountTry: values.tlAmount,
@@ -1226,9 +1289,19 @@ export class DataService {
     const account = this.findAccount(collection.accountId);
     const date = new Date(collection.createdAt).toLocaleDateString('tr-TR');
     const values = this.collectionDualValues(collection, account);
-    const message = collection.status === 'basarisiz' || collection.status === 'beklemede'
+    const fallback = collection.status === 'basarisiz' || collection.status === 'beklemede'
       ? `Merhaba ${account.contactName || account.companyName},\n${date} tarihinde otomatik tahsilat islemi basarisiz olmustur.\n\nOdenmesi gereken tutar:\n${this.moneyText(values.tlAmount, 'TL')}\n${this.moneyText(values.usdAmount, 'USD')}\n\nOdeme yapmak icin:\n${collection.paymentLink}\n\nFirma`
       : `Merhaba ${account.contactName || account.companyName},\n\n${date} tarihinde\n${this.moneyText(values.tlAmount, 'TL')} / ${this.moneyText(values.usdAmount, 'USD')} karsiligi odemeniz basariyla alinmistir.\n\nKalan bakiyeniz:\n${this.moneyText(values.remainingDisplayTry, 'TL')}\n${this.moneyText(values.remainingDisplayUsd, 'USD')}\n\nTesekkur ederiz.\nFirma`;
+    const message = this.renderMessageTemplate('Tahsilat', fallback, {
+      cariAdi: account.contactName || account.companyName,
+      tlBakiye: this.moneyText(values.remainingDisplayTry, 'TL'),
+      usdBakiye: this.moneyText(values.remainingDisplayUsd, 'USD'),
+      toplamTL: this.moneyText(values.tlAmount, 'TL'),
+      toplamUSD: this.moneyText(values.usdAmount, 'USD'),
+      fisNo: collection.receiptNo ?? collection.id,
+      tarih: date,
+      firmaAdi: 'Firma',
+    });
     return { to: account.whatsapp, message, link: this.whatsappLink(account.whatsapp, message) };
   }
 
@@ -1240,14 +1313,34 @@ export class DataService {
     const totalUsd = sale.currency === 'USD' ? sale.total : Math.round((sale.total / this.usdRate) * 100) / 100;
     const remainingTry = sale.currency === 'TRY' ? sale.remaining : Math.round(sale.remaining * this.usdRate * 100) / 100;
     const remainingUsd = sale.currency === 'USD' ? sale.remaining : Math.round((sale.remaining / this.usdRate) * 100) / 100;
-    const message = `Merhaba ${account.contactName}, satis bilgi notunuz:\nToplam:\n${totalTry} TL\n${totalUsd} USD\nKalan:\n${remainingTry} TL\n${remainingUsd} USD\nGuncel kur: ${this.usdRate}\nFirma`;
+    const fallback = `Merhaba ${account.contactName}, satis bilgi notunuz:\nToplam:\n${totalTry} TL\n${totalUsd} USD\nKalan:\n${remainingTry} TL\n${remainingUsd} USD\nGuncel kur: ${this.usdRate}\nFirma`;
+    const message = this.renderMessageTemplate('WhatsAppSatis', fallback, {
+      cariAdi: account.contactName || account.companyName,
+      tlBakiye: this.moneyText(remainingTry, 'TL'),
+      usdBakiye: this.moneyText(remainingUsd, 'USD'),
+      toplamTL: this.moneyText(totalTry, 'TL'),
+      toplamUSD: this.moneyText(totalUsd, 'USD'),
+      fisNo: sale.id,
+      tarih: new Date(sale.createdAt).toLocaleDateString('tr-TR'),
+      firmaAdi: 'Firma',
+    });
     return { to: account.whatsapp, message, link: this.whatsappLink(account.whatsapp, message) };
   }
 
   whatsappDebtReminder(accountId: string) {
     const account = this.findAccount(accountId);
     const balance = this.accountBalanceSummary(account);
-    const message = `Sayin ${account.contactName || account.companyName},\n\nGuncel cari bakiyeniz:\nTL bakiye: ${balance.displayTry} TL\nUSD bakiye: ${balance.displayUsd} USD\n\nIyi calismalar.`;
+    const fallback = `Sayin ${account.contactName || account.companyName},\n\nGuncel cari bakiyeniz:\nTL bakiye: ${balance.displayTry} TL\nUSD bakiye: ${balance.displayUsd} USD\n\nIyi calismalar.`;
+    const message = this.renderMessageTemplate('BorcHatirlatma', fallback, {
+      cariAdi: account.contactName || account.companyName,
+      tlBakiye: this.moneyText(balance.displayTry, 'TL'),
+      usdBakiye: this.moneyText(balance.displayUsd, 'USD'),
+      toplamTL: this.moneyText(balance.displayTry, 'TL'),
+      toplamUSD: this.moneyText(balance.displayUsd, 'USD'),
+      fisNo: '',
+      tarih: new Date().toLocaleDateString('tr-TR'),
+      firmaAdi: 'Firma',
+    });
     return { to: account.whatsapp, message, link: this.whatsappLink(account.whatsapp, message) };
   }
 
@@ -1439,6 +1532,13 @@ export class DataService {
     }
   }
 
+  private assertProductionStoreSafety() {
+    if (process.env.NODE_ENV !== 'production') return;
+    if (!process.env.ERP_STORE_PATH) {
+      throw new InternalServerErrorException('Canli veri koruma kilidi: NODE_ENV=production iken ERP_STORE_PATH kalici volume yolu olarak tanimlanmali. Varsayilan repo ici data/erp-store.json kullanilamaz.');
+    }
+  }
+
   private bootstrapAdminFromEnv() {
     if (this.users.some((user) => user.role === 'ADMIN')) return;
     const email = String(process.env.ADMIN_EMAIL || 'admin@buluterp.local').trim().toLocaleLowerCase('tr-TR');
@@ -1508,7 +1608,9 @@ export class DataService {
   private persist() {
     try {
       mkdirSync(dirname(this.storePath), { recursive: true });
-      writeFileSync(this.storePath, JSON.stringify({
+      this.backupCurrentStoreBeforeWrite();
+      const tempPath = `${this.storePath}.tmp-${process.pid}-${Date.now()}`;
+      writeFileSync(tempPath, JSON.stringify({
         version: 1,
         savedAt: new Date().toISOString(),
         usdRate: this.usdRate,
@@ -1527,9 +1629,18 @@ export class DataService {
         orders: this.orders,
         users: this.users,
       }, null, 2), 'utf8');
+      renameSync(tempPath, this.storePath);
     } catch {
       throw new InternalServerErrorException('ERP veri deposu yazilamadi');
     }
+  }
+
+  private backupCurrentStoreBeforeWrite() {
+    if (!existsSync(this.storePath)) return;
+    const backupDir = join(dirname(this.storePath), 'write-backups');
+    mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    copyFileSync(this.storePath, join(backupDir, `${basename(this.storePath)}.${stamp}.bak`));
   }
 
   private validateAccount(input: Partial<Account>) {
@@ -1595,6 +1706,27 @@ export class DataService {
     return String(value ?? '').trim().toLocaleLowerCase('tr-TR');
   }
 
+  private normalizeSearch(value?: string) {
+    return String(value ?? '')
+      .trim()
+      .toLocaleLowerCase('tr-TR')
+      .replace(/ı/g, 'i')
+      .replace(/ğ/g, 'g')
+      .replace(/ü/g, 'u')
+      .replace(/ş/g, 's')
+      .replace(/ö/g, 'o')
+      .replace(/ç/g, 'c')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+  }
+
+  private renderMessageTemplate(type: MessageTemplate['type'], fallback: string, variables: Record<string, string>) {
+    const template = this.messageTemplates.find((item) => item.type === type && item.active && item.default)
+      ?? this.messageTemplates.find((item) => item.type === type && item.active);
+    const source = template?.body || fallback;
+    return Object.entries(variables).reduce((message, [key, value]) => message.replaceAll(`{${key}}`, value), source);
+  }
+
   private saleBelongsToAccount(sale: Sale, account: Account) {
     const legacySale = sale as Sale & { accountName?: string };
     return sale.accountId === account.id
@@ -1629,6 +1761,18 @@ export class DataService {
     const category = this.categories.find((item) => item.name === name && item.active);
     if (!category) throw new BadRequestException('Aktif kategori secimi zorunlu');
     return category;
+  }
+
+  private categoryNameTree(category: Category) {
+    const names = new Set<string>([category.name]);
+    const visit = (parentId: string) => {
+      this.categories.filter((item) => item.parentId === parentId).forEach((child) => {
+        names.add(child.name);
+        visit(child.id);
+      });
+    };
+    visit(category.id);
+    return names;
   }
 
   private applyCollectionToAccount(account: Account, currency: Currency, amount: number, rate: number) {
@@ -1685,7 +1829,7 @@ export class DataService {
     const collectionDates = this.collections.filter((item) => item.accountId === account.id && item.status !== 'basarisiz').map((item) => item.createdAt);
     const purchaseDates = this.purchases.filter((item) => item.supplierId === account.id).map((item) => item.createdAt);
     const allDates = [...saleDates, ...collectionDates, ...purchaseDates, ...this.supplierPayments.filter((item) => item.supplierId === account.id).map((item) => item.createdAt)].sort((a, b) => b.localeCompare(a));
-    const sales = this.sales.filter((item) => this.saleBelongsToAccount(item, account));
+    const sales = this.sales.filter((item) => this.saleBelongsToAccount(item, account) && item.status !== 'Iptal');
     const balance = this.accountBalanceSummary(account);
     const revenue = this.accountRevenueSummary(sales);
     return {
@@ -1774,6 +1918,35 @@ export class DataService {
       remainingUsd,
       remainingDisplayTry,
       remainingDisplayUsd,
+    };
+  }
+
+  private productDealerPrice(product: Product) {
+    const tryValue = this.round(product.dealerTry || product.saleTry || ((product.dealerUsd || product.saleUsd || 0) * this.usdRate));
+    const usdValue = this.round(product.dealerUsd || product.saleUsd || (tryValue > 0 ? tryValue / this.usdRate : 0));
+    return { tryValue, usdValue };
+  }
+
+  private enrichOrderPrices(order: Order) {
+    const items = (order.items ?? []).map((item) => {
+      const product = this.products.find((candidate) => candidate.id === item.productId);
+      const price = product ? this.productDealerPrice(product) : { tryValue: this.round(item.unitPriceTry ?? 0), usdValue: this.round(item.unitPriceUsd ?? 0) };
+      const unitPriceTry = this.round(item.unitPriceTry || price.tryValue);
+      const unitPriceUsd = this.round(item.unitPriceUsd || price.usdValue);
+      return {
+        ...item,
+        productName: item.productName ?? product?.name ?? item.productId,
+        unitPriceTry,
+        unitPriceUsd,
+        lineTotalTry: this.round(item.lineTotalTry || unitPriceTry * item.quantity),
+        lineTotalUsd: this.round(item.lineTotalUsd || unitPriceUsd * item.quantity),
+      };
+    });
+    return {
+      ...order,
+      items,
+      totalTry: this.round(order.totalTry || items.reduce((sum, item) => sum + (item.lineTotalTry ?? 0), 0)),
+      totalUsd: this.round(order.totalUsd || items.reduce((sum, item) => sum + (item.lineTotalUsd ?? 0), 0)),
     };
   }
 

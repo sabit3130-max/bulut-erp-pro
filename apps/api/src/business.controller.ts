@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Header, Headers, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Headers, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { DataService } from './data.service';
 import { Account, Category, MessageTemplate, PdfTemplate, Product } from './types';
 
@@ -76,8 +76,8 @@ export class BusinessController {
   }
 
   @Get('accounts')
-  accounts() {
-    return this.data.listAccounts();
+  accounts(@Query('q') query?: string) {
+    return this.data.listAccounts(query);
   }
 
   @Post('accounts')
@@ -178,6 +178,11 @@ export class BusinessController {
   @Patch('sales/:id')
   patchSale(@Param('id') id: string, @Body() body: Parameters<BusinessController['normalizeSaleUpdate']>[0]) {
     return this.data.updateSale(id, this.normalizeSaleUpdate(body));
+  }
+
+  @Post('sales/:id/cancel')
+  cancelSale(@Param('id') id: string) {
+    return this.data.cancelSale(id);
   }
 
   @Get('collections')
@@ -303,6 +308,11 @@ export class BusinessController {
   @Put('message-templates/:id')
   updateMessageTemplate(@Param('id') id: string, @Body() body: Partial<MessageTemplate>) {
     return this.data.updateMessageTemplate(id, body);
+  }
+
+  @Delete('message-templates/:id')
+  deleteMessageTemplate(@Param('id') id: string) {
+    return this.data.deleteMessageTemplate(id);
   }
 
   @Post('orders')

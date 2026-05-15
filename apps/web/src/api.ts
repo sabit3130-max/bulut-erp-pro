@@ -10,6 +10,8 @@ export interface Account {
   taxOffice?: string;
   taxNumber?: string;
   address?: string;
+  city?: string;
+  district?: string;
   balanceTry: number;
   balanceUsd: number;
   riskLimit: number;
@@ -99,6 +101,7 @@ export interface Sale {
   exchangeRate?: number;
   paymentMethod?: string;
   description?: string;
+  status?: 'Aktif' | 'Iptal';
   subtotal: number;
   vat: number;
   discount: number;
@@ -280,6 +283,7 @@ export interface PdfTemplate {
 export interface MessageTemplate {
   id: string;
   type: string;
+  channel?: string;
   name: string;
   body: string;
   default: boolean;
@@ -345,7 +349,26 @@ export interface Order {
   createdAt: string;
 }
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+declare global {
+  interface Window {
+    __ERP_CONFIG__?: { VITE_API_URL?: string };
+  }
+}
+
+function configuredApiBaseUrl() {
+  const runtimeUrl = typeof window !== 'undefined' ? window.__ERP_CONFIG__?.VITE_API_URL : '';
+  const storedUrl = typeof window !== 'undefined' ? localStorage.getItem('erp_api_url') : '';
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (runtimeUrl) return runtimeUrl;
+  if (storedUrl) return storedUrl;
+  if (envUrl) return envUrl;
+  if (typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname) && window.location.port !== '3000') {
+    return 'http://localhost:3000';
+  }
+  return '';
+}
+
+export const API_BASE_URL = configuredApiBaseUrl();
 console.log('API_BASE_URL:', API_BASE_URL);
 
 const jsonHeaders = { 'Content-Type': 'application/json' };
@@ -364,7 +387,7 @@ export function apiUrl(path: string) {
 export async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(apiUrl(path), { headers: authHeaders() });
   if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
-  return response.json() as Promise<T>;
+  return parseJsonResponse<T>(response);
 }
 
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
@@ -374,7 +397,7 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     body: JSON.stringify(body ?? {}),
   });
   if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
-  return response.json() as Promise<T>;
+  return parseJsonResponse<T>(response);
 }
 
 export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
@@ -384,19 +407,29 @@ export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
     body: JSON.stringify(body ?? {}),
   });
   if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
-  return response.json() as Promise<T>;
+  return parseJsonResponse<T>(response);
 }
 
 export async function apiDelete<T>(path: string): Promise<T> {
   const response = await fetch(apiUrl(path), { method: 'DELETE', headers: authHeaders() });
   if (!response.ok) throw new Error((await response.text()) || 'API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
-  return response.json() as Promise<T>;
+  return parseJsonResponse<T>(response);
 }
 
 export async function apiHealthCheck(): Promise<{ status: 'ok' }> {
-  const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}/api/health`);
-  if (!response.ok) throw new Error('API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
-  const data = await response.json() as { status?: string };
-  if (data.status !== 'ok') throw new Error('API ba\u011Flant\u0131s\u0131 kurulamad\u0131');
+  const url = apiUrl('/health');
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`API ba\u011Flant\u0131s\u0131 kurulamad\u0131: ${url}`);
+  const data = await parseJsonResponse<{ status?: string }>(response);
+  if (data.status !== 'ok') throw new Error(`API health yan\u0131t\u0131 hatal\u0131: ${url}`);
   return { status: 'ok' };
+}
+
+async function parseJsonResponse<T>(response: Response): Promise<T> {
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    const preview = (await response.text()).slice(0, 80).replace(/\s+/g, ' ');
+    throw new Error(`API JSON yerine farkli yanit dondu. Adres: ${response.url}. Yanit: ${preview}`);
+  }
+  return response.json() as Promise<T>;
 }
